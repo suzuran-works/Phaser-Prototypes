@@ -11,6 +11,14 @@ type DungeonLayout = {
   boardLeft: number;
   boardTop: number;
   panelTop: number;
+  controlPad: ControlPadLayout;
+};
+
+type ControlPadLayout = {
+  size: number;
+  centerX: number;
+  centerY: number;
+  spacing: number;
 };
 
 type Cell = {
@@ -40,6 +48,12 @@ class SummaryScene extends BaseResponsiveScene {
     boardLeft: 180,
     boardTop: 190,
     panelTop: 56,
+    controlPad: {
+      size: 92,
+      centerX: 150,
+      centerY: 940,
+      spacing: 22,
+    },
   };
 
   private player: Cell = { x: 0, y: 0 };
@@ -65,6 +79,8 @@ class SummaryScene extends BaseResponsiveScene {
   private headerText!: Phaser.GameObjects.Text;
 
   private hintText!: Phaser.GameObjects.Text;
+
+  private touchStart: Phaser.Math.Vector2 | null = null;
 
   /**
    * Codex: ローグライク試作シーンを初期化する。
@@ -102,6 +118,8 @@ class SummaryScene extends BaseResponsiveScene {
       this.handleKeyboardMove(event.key);
     });
 
+    this.bindTouchInput();
+
     this.startFloor(1);
     this.bindResponsiveLayout();
   }
@@ -114,14 +132,25 @@ class SummaryScene extends BaseResponsiveScene {
     const cellSize = Math.floor(boardSize / GRID_SIZE);
     const snappedBoardSize = cellSize * GRID_SIZE;
 
+    const panelTop = Math.floor(height * 0.05);
+    const boardTop = Math.floor(height * 0.2);
+    const controlSize = Math.max(52, Math.floor(cellSize * 0.66));
+    const rawControlCenterY = Math.floor(boardTop + snappedBoardSize + controlSize * 1.4);
+
     return {
       width,
       height,
       boardSize: snappedBoardSize,
       cellSize,
       boardLeft: Math.floor((width - snappedBoardSize) / 2),
-      boardTop: Math.floor(height * 0.2),
-      panelTop: Math.floor(height * 0.05),
+      boardTop,
+      panelTop,
+      controlPad: {
+        size: controlSize,
+        centerX: Math.floor(width * 0.5),
+        centerY: Math.min(height - Math.floor(controlSize * 1.95), rawControlCenterY),
+        spacing: Math.max(10, Math.floor(controlSize * 0.22)),
+      },
     };
   }
 
@@ -171,18 +200,63 @@ class SummaryScene extends BaseResponsiveScene {
     }
   }
 
+
+  /**
+   * Codex: スワイプとタップの入力を受け取り、スマートフォン操作を有効化する。
+   */
+  private bindTouchInput(): void {
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const buttonDirection = this.getDirectionByControlPad(pointer.x, pointer.y);
+      if (buttonDirection) {
+        this.handleDirectionMove(buttonDirection);
+        this.touchStart = null;
+        return;
+      }
+
+      this.touchStart = new Phaser.Math.Vector2(pointer.x, pointer.y);
+    });
+
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      if (!this.touchStart) {
+        return;
+      }
+
+      const deltaX = pointer.x - this.touchStart.x;
+      const deltaY = pointer.y - this.touchStart.y;
+      this.touchStart = null;
+
+      const threshold = Math.max(18, Math.floor(this.layout.cellSize * 0.2));
+      if (Math.abs(deltaX) < threshold && Math.abs(deltaY) < threshold) {
+        return;
+      }
+
+      if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+        this.handleDirectionMove({ x: deltaX > 0 ? 1 : -1, y: 0 });
+      } else {
+        this.handleDirectionMove({ x: 0, y: deltaY > 0 ? 1 : -1 });
+      }
+    });
+  }
+
   /**
    * Codex: 押下キーから移動量を計算して1ターン進行する。
    */
   private handleKeyboardMove(key: string): void {
-    const now = this.time.now;
-
-    if (now - this.lastMoveAt < MOVE_COOLDOWN_MS || this.gameState !== 'explore') {
+    const direction = this.getDirectionByKey(key);
+    if (!direction) {
       return;
     }
 
-    const direction = this.getDirectionByKey(key);
-    if (!direction) {
+    this.handleDirectionMove(direction);
+  }
+
+  /**
+   * Codex: 方向ベクトルを使って移動・攻撃・敵ターンを1回進行する。
+   */
+  private handleDirectionMove(direction: Cell): void {
+    const now = this.time.now;
+
+    if (now - this.lastMoveAt < MOVE_COOLDOWN_MS || this.gameState !== 'explore') {
       return;
     }
 
@@ -340,6 +414,7 @@ class SummaryScene extends BaseResponsiveScene {
     this.drawStairs(graphics);
     this.drawEnemies(graphics);
     this.drawPlayer(graphics);
+    this.drawControlPad(graphics);
     this.drawUi();
   }
 
@@ -427,6 +502,57 @@ class SummaryScene extends BaseResponsiveScene {
     graphics.fillCircle(center.x, center.y - radius * 0.15, Math.max(2, radius * 0.18));
   }
 
+
+  /**
+   * Codex: スマートフォン向けの方向パッドを描画する。
+   */
+  private drawControlPad(graphics: Phaser.GameObjects.Graphics): void {
+    const buttons = this.getControlButtons();
+
+    for (const button of buttons) {
+      graphics.fillStyle(0x1e293b, 0.78);
+      graphics.fillRoundedRect(button.x, button.y, button.size, button.size, Math.floor(button.size * 0.24));
+
+      graphics.lineStyle(2, 0x94a3b8, 0.9);
+      graphics.strokeRoundedRect(button.x, button.y, button.size, button.size, Math.floor(button.size * 0.24));
+
+      graphics.fillStyle(0xf8fafc, 0.95);
+      this.drawArrowGlyph(graphics, button);
+    }
+  }
+
+  /**
+   * Codex: 方向パッドの矢印記号を描画する。
+   */
+  private drawArrowGlyph(
+    graphics: Phaser.GameObjects.Graphics,
+    button: { x: number; y: number; size: number; direction: Cell },
+  ): void {
+    const centerX = button.x + button.size / 2;
+    const centerY = button.y + button.size / 2;
+    const body = button.size * 0.2;
+    const tip = button.size * 0.28;
+
+    if (button.direction.y === -1) {
+      graphics.fillTriangle(centerX, centerY - tip, centerX - tip * 0.8, centerY, centerX + tip * 0.8, centerY);
+      graphics.fillRect(centerX - body / 2, centerY - body * 0.1, body, tip * 0.8);
+      return;
+    }
+    if (button.direction.y === 1) {
+      graphics.fillTriangle(centerX, centerY + tip, centerX - tip * 0.8, centerY, centerX + tip * 0.8, centerY);
+      graphics.fillRect(centerX - body / 2, centerY - tip * 0.7, body, tip * 0.8);
+      return;
+    }
+    if (button.direction.x === -1) {
+      graphics.fillTriangle(centerX - tip, centerY, centerX, centerY - tip * 0.8, centerX, centerY + tip * 0.8);
+      graphics.fillRect(centerX - body * 0.1, centerY - body / 2, tip * 0.8, body);
+      return;
+    }
+
+    graphics.fillTriangle(centerX + tip, centerY, centerX, centerY - tip * 0.8, centerX, centerY + tip * 0.8);
+    graphics.fillRect(centerX - tip * 0.7, centerY - body / 2, tip * 0.8, body);
+  }
+
   /**
    * Codex: ステータス表示と操作説明を更新する。
    */
@@ -434,8 +560,34 @@ class SummaryScene extends BaseResponsiveScene {
     this.headerText.setPosition(this.layout.width / 2, this.layout.panelTop);
     this.headerText.setText(`${TITLE} ${SUBTITLE} | FLOOR ${this.floor} | HP ${this.hp} | SCORE ${this.score}`);
 
-    this.hintText.setPosition(this.layout.width / 2, this.layout.boardTop + this.layout.boardSize + 18);
-    this.hintText.setText(`矢印キー / WASD で移動・攻撃\n赤い敵を避けながら青い階段へ。TURN ${this.turnCount}`);
+    const hintY = this.layout.controlPad.centerY + this.layout.controlPad.size * 1.15;
+    this.hintText.setPosition(this.layout.width / 2, hintY);
+    this.hintText.setText(`矢印キー / WASD / スワイプ / 画面下ボタンで移動・攻撃\n赤い敵を避けながら青い階段へ。TURN ${this.turnCount}`);
+  }
+
+  /**
+   * Codex: 方向パッドの各ボタン矩形を返す。
+   */
+  private getControlButtons(): Array<{ x: number; y: number; size: number; direction: Cell }> {
+    const { centerX, centerY, size, spacing } = this.layout.controlPad;
+    const gap = size + spacing;
+
+    return [
+      { x: centerX - size / 2, y: centerY - gap - size / 2, size, direction: { x: 0, y: -1 } },
+      { x: centerX - gap - size / 2, y: centerY - size / 2, size, direction: { x: -1, y: 0 } },
+      { x: centerX + gap - size / 2, y: centerY - size / 2, size, direction: { x: 1, y: 0 } },
+      { x: centerX - size / 2, y: centerY + gap - size / 2, size, direction: { x: 0, y: 1 } },
+    ];
+  }
+
+  /**
+   * Codex: タップ座標が方向パッド上なら該当方向を返す。
+   */
+  private getDirectionByControlPad(x: number, y: number): Cell | null {
+    const hitButton = this.getControlButtons().find((button) => x >= button.x && x <= button.x + button.size
+      && y >= button.y && y <= button.y + button.size);
+
+    return hitButton ? { ...hitButton.direction } : null;
   }
 
   /**
