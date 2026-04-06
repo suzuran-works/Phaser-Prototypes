@@ -24,11 +24,10 @@ type OrbitBall = {
 
 const INITIAL_BALL_COUNT = 14;
 const CORE_RADIUS = 30;
-const BASE_RADIUS = 16;
-const RADIUS_GROWTH = 2.4;
-const GRAVITY_STRENGTH = 220000;
+const BASE_RADIUS = 13;
+const RADIUS_GROWTH = 2.1;
+const GRAVITY_STRENGTH = 300000;
 const SOFTENING_DISTANCE = 36;
-const BORDER_DAMPING = 0.98;
 
 class SummaryScene extends BaseResponsiveScene {
   public static readonly key = 'Scripts05SummaryScene';
@@ -119,14 +118,14 @@ class SummaryScene extends BaseResponsiveScene {
       const spawn = this.pickSpawnPosition();
       const tangent = new Phaser.Math.Vector2(-(spawn.y - this.layout.centerY), spawn.x - this.layout.centerX).normalize();
       const randomDirection = Phaser.Math.FloatBetween(-1, 1);
-      const orbitSpeed = Phaser.Math.FloatBetween(50, 140);
+      const orbitSpeed = Phaser.Math.FloatBetween(90, 190);
 
       this.createBall({
         value: 1,
         position: spawn,
         velocity: tangent.scale(orbitSpeed * randomDirection).add(new Phaser.Math.Vector2(
-          Phaser.Math.Between(-25, 25),
-          Phaser.Math.Between(-25, 25),
+          Phaser.Math.Between(-45, 45),
+          Phaser.Math.Between(-45, 45),
         )),
       });
     }
@@ -196,42 +195,38 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 速度を積分して位置を更新し、画面外への逸脱を反射で抑える。
+   * Codex: 速度を積分して位置を更新し、画面外へ出た玉は反対側から再登場させる。
    */
   private integratePositions(deltaSec: number): void {
-    const minX = 0;
-    const minY = 0;
-    const maxX = this.layout.width;
-    const maxY = this.layout.height;
-
     for (const ball of this.balls) {
       ball.position.x += ball.velocity.x * deltaSec;
       ball.position.y += ball.velocity.y * deltaSec;
-
-      if (ball.position.x - ball.radius < minX) {
-        ball.position.x = ball.radius;
-        ball.velocity.x = Math.abs(ball.velocity.x) * BORDER_DAMPING;
-      }
-
-      if (ball.position.x + ball.radius > maxX) {
-        ball.position.x = maxX - ball.radius;
-        ball.velocity.x = -Math.abs(ball.velocity.x) * BORDER_DAMPING;
-      }
-
-      if (ball.position.y - ball.radius < minY) {
-        ball.position.y = ball.radius;
-        ball.velocity.y = Math.abs(ball.velocity.y) * BORDER_DAMPING;
-      }
-
-      if (ball.position.y + ball.radius > maxY) {
-        ball.position.y = maxY - ball.radius;
-        ball.velocity.y = -Math.abs(ball.velocity.y) * BORDER_DAMPING;
-      }
+      this.wrapBallPosition(ball);
     }
   }
 
   /**
-   * Codex: 玉同士の衝突を判定し、同値反射または吸収合体ルールを適用する。
+   * Codex: 画面端を越えた玉を反対側へワープさせ、端反射を発生させない。
+   */
+  private wrapBallPosition(ball: OrbitBall): void {
+    const maxX = this.layout.width;
+    const maxY = this.layout.height;
+
+    if (ball.position.x < -ball.radius) {
+      ball.position.x = maxX + ball.radius;
+    } else if (ball.position.x > maxX + ball.radius) {
+      ball.position.x = -ball.radius;
+    }
+
+    if (ball.position.y < -ball.radius) {
+      ball.position.y = maxY + ball.radius;
+    } else if (ball.position.y > maxY + ball.radius) {
+      ball.position.y = -ball.radius;
+    }
+  }
+
+  /**
+   * Codex: 玉同士の衝突を判定し、同値加算または異値反射ルールを適用する。
    */
   private resolveCollisions(): void {
     for (let i = 0; i < this.balls.length; i += 1) {
@@ -260,8 +255,7 @@ class SummaryScene extends BaseResponsiveScene {
           continue;
         }
 
-        this.resolveAbsorbCollision(a, b);
-        j -= 1;
+        this.resolveDifferentCollision(a, b);
       }
     }
   }
@@ -297,21 +291,30 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 異なる数字同士は大きい玉が小さい玉を吸収して成長する。
+   * Codex: 異なる数字同士は数値を維持したまま弾性反射のみ適用する。
    */
-  private resolveAbsorbCollision(a: OrbitBall, b: OrbitBall): void {
-    const bigger = a.value > b.value ? a : b;
-    const smaller = bigger === a ? b : a;
+  private resolveDifferentCollision(a: OrbitBall, b: OrbitBall): void {
+    const normal = b.position.clone().subtract(a.position);
+    const distance = Math.max(0.001, normal.length());
+    normal.scale(1 / distance);
 
-    const totalMass = bigger.mass + smaller.mass;
-    bigger.velocity = bigger.velocity.clone().scale(bigger.mass / totalMass)
-      .add(smaller.velocity.clone().scale(smaller.mass / totalMass));
+    const relativeVelocity = b.velocity.clone().subtract(a.velocity);
+    const separatingSpeed = relativeVelocity.dot(normal);
 
-    bigger.position = bigger.position.clone().scale(bigger.mass / totalMass)
-      .add(smaller.position.clone().scale(smaller.mass / totalMass));
+    if (separatingSpeed < 0) {
+      const impulse = (-(1 + 1) * separatingSpeed) / (1 / a.mass + 1 / b.mass);
+      const impulseVector = normal.clone().scale(impulse);
 
-    this.setBallValue(bigger, bigger.value + smaller.value);
-    this.destroyBall(smaller.id);
+      a.velocity.subtract(impulseVector.clone().scale(1 / a.mass));
+      b.velocity.add(impulseVector.clone().scale(1 / b.mass));
+    }
+
+    const overlap = a.radius + b.radius - distance;
+    if (overlap > 0) {
+      const correction = normal.clone().scale(overlap / 2 + 0.5);
+      a.position.subtract(correction);
+      b.position.add(correction);
+    }
   }
 
   /**
@@ -323,21 +326,6 @@ class SummaryScene extends BaseResponsiveScene {
     ball.mass = this.computeMass(ball.value, ball.radius);
     ball.color = this.pickBallColor(ball.value);
     ball.label.setText(String(ball.value));
-  }
-
-  /**
-   * Codex: 指定IDの玉を配列と表示オブジェクトから安全に除去する。
-   */
-  private destroyBall(id: number): void {
-    const index = this.balls.findIndex((ball) => ball.id === id);
-    if (index < 0) {
-      return;
-    }
-
-    const ball = this.balls[index];
-    ball.graphics.destroy();
-    ball.label.destroy();
-    this.balls.splice(index, 1);
   }
 
   /**
