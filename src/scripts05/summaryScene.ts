@@ -27,7 +27,11 @@ const CORE_RADIUS = 15;
 const BASE_RADIUS = 6.5;
 const RADIUS_GROWTH = 1.05;
 const GRAVITY_STRENGTH = 600000;
+const INTER_BALL_GRAVITY = 9000;
 const SOFTENING_DISTANCE = 36;
+const ORBIT_OUTER_LIMIT_RATIO = 0.48;
+const ORBIT_RESTORE_STRENGTH = 4.6;
+const MAX_SPEED = 520;
 
 class SummaryScene extends BaseResponsiveScene {
   public static readonly key = 'Scripts05SummaryScene';
@@ -116,17 +120,21 @@ class SummaryScene extends BaseResponsiveScene {
 
     for (let i = 0; i < INITIAL_BALL_COUNT; i += 1) {
       const spawn = this.pickSpawnPosition();
-      const tangent = new Phaser.Math.Vector2(-(spawn.y - this.layout.centerY), spawn.x - this.layout.centerX).normalize();
-      const randomDirection = Phaser.Math.FloatBetween(-1, 1);
-      const orbitSpeed = Phaser.Math.FloatBetween(180, 380);
+      const toCenter = new Phaser.Math.Vector2(this.layout.centerX - spawn.x, this.layout.centerY - spawn.y);
+      const radius = Math.max(1, toCenter.length());
+      const radialDirection = toCenter.clone().normalize();
+      const tangentDirection = new Phaser.Math.Vector2(-radialDirection.y, radialDirection.x);
+      const orbitDirection = Phaser.Math.RND.sign();
+      const circularSpeed = Math.sqrt(GRAVITY_STRENGTH / radius);
+      const ellipseFactor = Phaser.Math.FloatBetween(0.72, 1.18);
+      const radialKick = Phaser.Math.FloatBetween(-90, 110);
 
       this.createBall({
         value: 1,
         position: spawn,
-        velocity: tangent.scale(orbitSpeed * randomDirection).add(new Phaser.Math.Vector2(
-          Phaser.Math.Between(-90, 90),
-          Phaser.Math.Between(-90, 90),
-        )),
+        velocity: tangentDirection
+          .scale(circularSpeed * ellipseFactor * orbitDirection)
+          .add(radialDirection.scale(radialKick)),
       });
     }
   }
@@ -182,6 +190,14 @@ class SummaryScene extends BaseResponsiveScene {
    * Codex: 中央球からの疑似万有引力を全玉へ適用する。
    */
   private applyGravity(deltaSec: number): void {
+    this.applyCoreGravity(deltaSec);
+    this.applyMutualGravity(deltaSec);
+  }
+
+  /**
+   * Codex: 中央球から受ける重力のみを適用し、主軌道の土台を作る。
+   */
+  private applyCoreGravity(deltaSec: number): void {
     for (const ball of this.balls) {
       const dx = this.layout.centerX - ball.position.x;
       const dy = this.layout.centerY - ball.position.y;
@@ -195,33 +211,59 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 速度を積分して位置を更新し、画面外へ出た玉は反対側から再登場させる。
+   * Codex: 玉同士の弱い重力を加えて、スイングバイ風の速度変化を作る。
+   */
+  private applyMutualGravity(deltaSec: number): void {
+    for (let i = 0; i < this.balls.length; i += 1) {
+      const a = this.balls[i];
+      if (!a) {
+        continue;
+      }
+
+      for (let j = i + 1; j < this.balls.length; j += 1) {
+        const b = this.balls[j];
+        if (!b) {
+          continue;
+        }
+
+        const delta = b.position.clone().subtract(a.position);
+        const distSq = delta.lengthSq() + SOFTENING_DISTANCE * SOFTENING_DISTANCE;
+        const dist = Math.sqrt(distSq);
+        const normal = dist > 0 ? delta.scale(1 / dist) : new Phaser.Math.Vector2(1, 0);
+        const force = (INTER_BALL_GRAVITY * a.mass * b.mass) / distSq;
+        const accelA = force / a.mass;
+        const accelB = force / b.mass;
+
+        a.velocity.add(normal.clone().scale(accelA * deltaSec));
+        b.velocity.subtract(normal.clone().scale(accelB * deltaSec));
+      }
+    }
+  }
+
+  /**
+   * Codex: 速度を積分して位置を更新し、軌道外へ出る玉を中央へ緩やかに戻す。
    */
   private integratePositions(deltaSec: number): void {
     for (const ball of this.balls) {
       ball.position.x += ball.velocity.x * deltaSec;
       ball.position.y += ball.velocity.y * deltaSec;
-      this.wrapBallPosition(ball);
+      this.containOrbitArea(ball, deltaSec);
+      ball.velocity.limit(MAX_SPEED);
     }
   }
 
   /**
-   * Codex: 画面端を越えた玉を反対側へワープさせ、端反射を発生させない。
+   * Codex: 外周を越えた玉に復元加速度を与え、楕円軌道を崩さず離脱を防ぐ。
    */
-  private wrapBallPosition(ball: OrbitBall): void {
-    const maxX = this.layout.width;
-    const maxY = this.layout.height;
+  private containOrbitArea(ball: OrbitBall, deltaSec: number): void {
+    const toCenter = new Phaser.Math.Vector2(this.layout.centerX - ball.position.x, this.layout.centerY - ball.position.y);
+    const distance = toCenter.length();
+    const outerLimit = Math.min(this.layout.width, this.layout.height) * ORBIT_OUTER_LIMIT_RATIO;
 
-    if (ball.position.x < -ball.radius) {
-      ball.position.x = maxX + ball.radius;
-    } else if (ball.position.x > maxX + ball.radius) {
-      ball.position.x = -ball.radius;
-    }
-
-    if (ball.position.y < -ball.radius) {
-      ball.position.y = maxY + ball.radius;
-    } else if (ball.position.y > maxY + ball.radius) {
-      ball.position.y = -ball.radius;
+    if (distance > outerLimit && distance > 0) {
+      const overflowRatio = (distance - outerLimit) / outerLimit;
+      const restore = toCenter.scale(1 / distance).scale(ORBIT_RESTORE_STRENGTH * overflowRatio);
+      ball.velocity.add(restore.scale(deltaSec * GRAVITY_STRENGTH * 0.01));
     }
   }
 
