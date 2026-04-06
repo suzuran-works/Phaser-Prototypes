@@ -1,0 +1,116 @@
+# Codex: GitHub Pages へ静的ファイルをデプロイする。
+name: Deploy static content to Pages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  pull-requests: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  evaluate_deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.decision.outputs.should_deploy }}
+    steps:
+      - name: Evaluate deploy skip marker
+        id: decision
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Codex: skip deploy マーカーの表記ゆれを吸収して判定する正規表現。
+            const skipMarkerPattern = /\[\s*skip deploy\s*\]/i;
+            const headMessage = context.payload.head_commit?.message ?? '';
+            let prTitle = '';
+            let prNumber = '';
+
+            /**
+             * Codex: skip deploy マーカーを含むか判定する。
+             * @param {string} text 判定対象のテキスト
+             * @returns {boolean} マーカーを含む場合は true
+             */
+            function hasSkipMarker(text) {
+              return skipMarkerPattern.test(text);
+            }
+
+            // Codex: main ブランチの push では、HEAD コミットに紐づく PR タイトルを取得する。
+            if (context.eventName === 'push' && context.ref === 'refs/heads/main') {
+              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+              });
+
+              if (prs.data.length > 0) {
+                // Codex: merge commit SHA が一致する PR を優先して選択する。
+                const matchedByMergeCommit = prs.data.find((pr) => pr.merge_commit_sha === context.sha);
+                const selectedPr = matchedByMergeCommit ?? prs.data[0];
+                prTitle = selectedPr.title ?? '';
+                prNumber = selectedPr.number?.toString() ?? '';
+              }
+            }
+
+            // Codex: デバッグ用に判定材料をログ出力する。
+            core.info(`Codex: eventName=${context.eventName}, ref=${context.ref}, sha=${context.sha}`);
+            core.info(`Codex: headMessage=${JSON.stringify(headMessage)}`);
+            core.info(`Codex: prNumber=${JSON.stringify(prNumber)}, prTitle=${JSON.stringify(prTitle)}`);
+            core.info(`Codex: headMessageHasSkip=${hasSkipMarker(headMessage)}, prTitleHasSkip=${hasSkipMarker(prTitle)}`);
+
+            const shouldDeploy = !(hasSkipMarker(headMessage) || hasSkipMarker(prTitle));
+            core.setOutput('should_deploy', shouldDeploy ? 'true' : 'false');
+
+            if (shouldDeploy) {
+              core.notice('Codex: skip marker が見つからないためデプロイを実行します。');
+            } else {
+              core.notice('Codex: skip marker が見つかったためデプロイをスキップします。');
+            }
+
+  deploy:
+    needs: evaluate_deploy
+    if: ${{ needs.evaluate_deploy.outputs.should_deploy == 'true' }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,21 @@
+{
+  "name": "phaser-template",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "init:template": "node scripts/init-template.mjs",
+    "create:page": "node scripts/create-page.mjs"
+  },
+  "dependencies": {
+    "phaser": "^3.80.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.1.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.2.0"
+  }
+}
