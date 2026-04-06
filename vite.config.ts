@@ -14,6 +14,7 @@ export default defineConfig({
         page00: resolve(__dirname, 'page00', 'index.html'),
         page01: resolve(__dirname, 'page01', 'index.html'),
         page02: resolve(__dirname, 'page02', 'index.html'),
+        page03: resolve(__dirname, 'page03', 'index.html'),
       },
     },
   },
