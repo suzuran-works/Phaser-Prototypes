@@ -23,6 +23,7 @@ type SceneLayout = {
 };
 
 type Fish = {
+  id: number;
   x: number;
   y: number;
   vx: number;
@@ -32,6 +33,18 @@ type Fish = {
   size: number;
   bornAt: number;
   sprite: Phaser.GameObjects.Container;
+};
+
+type TentacleTip = {
+  x: number;
+  y: number;
+};
+
+type GrabSequence = {
+  fishId: number;
+  tentacleIndex: number;
+  progress: number;
+  phase: 'extend' | 'retract';
 };
 
 class SummaryScene extends BaseResponsiveScene {
@@ -44,6 +57,8 @@ class SummaryScene extends BaseResponsiveScene {
   private fishSpawnTimer = 0;
 
   private consumedCount = 0;
+
+  private fishSerial = 0;
 
   private creatureStage = 0;
 
@@ -69,11 +84,17 @@ class SummaryScene extends BaseResponsiveScene {
 
   private creatureGraphics?: Phaser.GameObjects.Graphics;
 
+  private tentacleTips: TentacleTip[] = [];
+
+  private grabSequence?: GrabSequence;
+
   private titleText?: Phaser.GameObjects.Text;
 
   private statusText?: Phaser.GameObjects.Text;
 
   private hintText?: Phaser.GameObjects.Text;
+
+  private uiPanel?: Phaser.GameObjects.Rectangle;
 
   public constructor() {
     super(SummaryScene.key);
@@ -97,7 +118,7 @@ class SummaryScene extends BaseResponsiveScene {
     this.spawnFishIfNeeded();
     this.updateFishMotion(deltaSec);
     this.moveCreature(deltaSec);
-    this.tryConsumeFish();
+    this.updatePredationSequence(deltaSec);
     this.drawCreatureOrganicForm();
     this.animateBackground();
     this.refreshUI();
@@ -200,31 +221,52 @@ class SummaryScene extends BaseResponsiveScene {
       return;
     }
 
-    this.titleText = this.add.text(this.layout.width / 2, 28, CREATURE_NAME, {
+    const isMobile = this.layout.width < 640;
+    const titleFontSize = isMobile ? '22px' : '34px';
+    const statusFontSize = isMobile ? '18px' : '24px';
+    const hintFontSize = isMobile ? '16px' : '22px';
+    const topPadding = isMobile ? 16 : 28;
+    const titleY = topPadding;
+    const statusY = isMobile ? titleY + 42 : topPadding;
+    const hintY = this.layout.height - (isMobile ? 20 : 42);
+
+    this.uiPanel = this.add.rectangle(
+      this.layout.width / 2,
+      isMobile ? 44 : 38,
+      this.layout.width - (isMobile ? 24 : 48),
+      isMobile ? 84 : 64,
+      0x02101f,
+      0.42,
+    ).setOrigin(0.5, 0);
+
+    this.titleText = this.add.text(this.layout.width / 2, titleY, CREATURE_NAME, {
       fontFamily: 'sans-serif',
-      fontSize: '34px',
+      fontSize: titleFontSize,
       color: '#e7fbff',
       stroke: '#001626',
       strokeThickness: 6,
       fontStyle: 'bold',
     }).setOrigin(0.5, 0);
 
-    this.statusText = this.add.text(28, 28, '', {
+    this.statusText = this.add.text(isMobile ? this.layout.width / 2 : 28, statusY, '', {
       fontFamily: 'sans-serif',
-      fontSize: '24px',
+      fontSize: statusFontSize,
       color: '#d8fff8',
       stroke: '#042038',
       strokeThickness: 5,
       fontStyle: 'bold',
-    }).setOrigin(0, 0);
+      align: isMobile ? 'center' : 'left',
+    }).setOrigin(isMobile ? 0.5 : 0, 0);
 
-    this.hintText = this.add.text(this.layout.width / 2, this.layout.height - 42, '小魚を自動で追尾して捕食中...', {
+    this.hintText = this.add.text(this.layout.width / 2, hintY, '触手で小魚を掴み、口元へ運んで捕食中', {
       fontFamily: 'sans-serif',
-      fontSize: '22px',
+      fontSize: hintFontSize,
       color: '#dcf8ff',
       stroke: '#04203b',
       strokeThickness: 5,
       fontStyle: 'bold',
+      align: 'center',
+      wordWrap: { width: this.layout.width - (isMobile ? 48 : 120), useAdvancedWrap: true },
     }).setOrigin(0.5, 1);
 
     this.tweens.add({
@@ -237,7 +279,7 @@ class SummaryScene extends BaseResponsiveScene {
       ease: 'Sine.InOut',
     });
 
-    this.uiLayer.add([this.titleText, this.statusText, this.hintText]);
+    this.uiLayer.add([this.uiPanel, this.titleText, this.statusText, this.hintText]);
     this.refreshUI();
   }
 
@@ -271,6 +313,7 @@ class SummaryScene extends BaseResponsiveScene {
     fishSprite.setPosition(x, y);
 
     this.fishes.push({
+      id: this.fishSerial,
       x,
       y,
       vx: Math.cos(angle) * speed,
@@ -281,6 +324,7 @@ class SummaryScene extends BaseResponsiveScene {
       bornAt: this.time.now,
       sprite: fishSprite,
     });
+    this.fishSerial += 1;
 
     this.fishLayer.add(fishSprite);
   }
@@ -299,7 +343,14 @@ class SummaryScene extends BaseResponsiveScene {
    * Codex: 小魚群の遊泳と壁反射を更新し、群れらしい揺らぎを与える。
    */
   private updateFishMotion(deltaSec: number): void {
+    const grabbedFishId = this.grabSequence?.fishId;
+    const topBoundary = this.layout.width < 640 ? 128 : 84;
+
     for (const fish of this.fishes) {
+      if (fish.id === grabbedFishId) {
+        continue;
+      }
+
       fish.phase += deltaSec * 2.2;
 
       fish.vx += Math.cos(fish.phase * 0.85) * 8 * deltaSec;
@@ -316,12 +367,12 @@ class SummaryScene extends BaseResponsiveScene {
         fish.vx *= -1;
       }
 
-      if (fish.y < 76 || fish.y > this.layout.height - 18) {
+      if (fish.y < topBoundary || fish.y > this.layout.height - 18) {
         fish.vy *= -1;
       }
 
       fish.x = Phaser.Math.Clamp(fish.x, 20, this.layout.width - 20);
-      fish.y = Phaser.Math.Clamp(fish.y, 76, this.layout.height - 18);
+      fish.y = Phaser.Math.Clamp(fish.y, topBoundary, this.layout.height - 18);
 
       fish.sprite.setPosition(fish.x, fish.y);
       fish.sprite.setRotation(Math.atan2(fish.vy, fish.vx));
@@ -332,7 +383,7 @@ class SummaryScene extends BaseResponsiveScene {
    * Codex: もっとも近い小魚へ向けて生物を滑らかに誘導する。
    */
   private moveCreature(deltaSec: number): void {
-    const nearest = this.findNearestFish();
+    const nearest = this.grabSequence ? this.findFishById(this.grabSequence.fishId) : this.findNearestFish();
 
     if (nearest) {
       const dx = nearest.x - this.creatureX;
@@ -358,26 +409,84 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 捕食判定を行い、成長段階と演出を更新する。
+   * Codex: 触手の伸展→捕獲→口元への搬送という捕食シーケンスを制御する。
    */
-  private tryConsumeFish(): void {
-    for (let i = this.fishes.length - 1; i >= 0; i -= 1) {
-      const fish = this.fishes[i];
-      const distance = Phaser.Math.Distance.Between(this.creatureX, this.creatureY, fish.x, fish.y);
-      const consumeRadius = 42 + this.creatureStage * 5;
+  private updatePredationSequence(deltaSec: number): void {
+    if (!this.grabSequence) {
+      this.tryStartGrabSequence();
+      return;
+    }
 
-      if (distance < consumeRadius) {
-        fish.sprite.destroy();
-        this.fishes.splice(i, 1);
-        this.consumedCount += 1;
-        this.playConsumeEffect(fish.x, fish.y);
+    const fish = this.findFishById(this.grabSequence.fishId);
+    if (!fish) {
+      this.grabSequence = undefined;
+      return;
+    }
 
-        const nextStage = this.getCreatureStage(this.consumedCount);
-        if (nextStage > this.creatureStage) {
-          this.creatureStage = nextStage;
-          this.flashStageUp();
-        }
+    const mouth = this.getMouthWorldPosition();
+    const tipWorld = this.getTentacleTipWorldPosition(this.grabSequence.tentacleIndex);
+    const tipToFishLerp = Phaser.Math.Clamp(this.grabSequence.progress * 1.6, 0, 1);
+
+    if (this.grabSequence.phase === 'extend') {
+      this.grabSequence.progress = Phaser.Math.Clamp(this.grabSequence.progress + deltaSec * 2.8, 0, 1);
+      fish.x = Phaser.Math.Linear(tipWorld.x, fish.x, 1 - tipToFishLerp);
+      fish.y = Phaser.Math.Linear(tipWorld.y, fish.y, 1 - tipToFishLerp);
+      if (this.grabSequence.progress >= 1) {
+        this.grabSequence.phase = 'retract';
       }
+    } else {
+      this.grabSequence.progress = Phaser.Math.Clamp(this.grabSequence.progress - deltaSec * 2.4, 0, 1);
+      const retractLerp = Phaser.Math.Clamp(1 - this.grabSequence.progress, 0, 1);
+      fish.x = Phaser.Math.Linear(fish.x, mouth.x, retractLerp);
+      fish.y = Phaser.Math.Linear(fish.y, mouth.y, retractLerp);
+
+      if (Phaser.Math.Distance.Between(fish.x, fish.y, mouth.x, mouth.y) < 12) {
+        this.finishEating(fish);
+      }
+    }
+
+    fish.sprite.setPosition(fish.x, fish.y);
+    fish.sprite.setRotation(Math.atan2(mouth.y - fish.y, mouth.x - fish.x));
+  }
+
+  /**
+   * Codex: 生物の近傍に魚が来たら、最適な触手を選んで捕獲を開始する。
+   */
+  private tryStartGrabSequence(): void {
+    const target = this.findNearestFish();
+    if (!target || this.tentacleTips.length === 0) {
+      return;
+    }
+
+    const engageDistance = 220 + this.creatureStage * 20;
+    const distanceToCreature = Phaser.Math.Distance.Between(this.creatureX, this.creatureY, target.x, target.y);
+    if (distanceToCreature > engageDistance) {
+      return;
+    }
+
+    const tentacleIndex = this.findClosestTentacleToFish(target);
+    this.grabSequence = {
+      fishId: target.id,
+      tentacleIndex,
+      progress: 0,
+      phase: 'extend',
+    };
+  }
+
+  /**
+   * Codex: 口元に到達した小魚を消費し、進化判定と演出を反映する。
+   */
+  private finishEating(fish: Fish): void {
+    fish.sprite.destroy();
+    this.fishes.splice(this.fishes.indexOf(fish), 1);
+    this.grabSequence = undefined;
+    this.consumedCount += 1;
+    this.playConsumeEffect(fish.x, fish.y);
+
+    const nextStage = this.getCreatureStage(this.consumedCount);
+    if (nextStage > this.creatureStage) {
+      this.creatureStage = nextStage;
+      this.flashStageUp();
     }
   }
 
@@ -423,6 +532,8 @@ class SummaryScene extends BaseResponsiveScene {
       return;
     }
 
+    this.tentacleTips = [];
+
     for (let i = 0; i < count; i += 1) {
       const spread = (i / (count - 1 || 1)) * Math.PI - Math.PI * 0.5;
       const baseX = Math.cos(spread) * 34;
@@ -441,10 +552,13 @@ class SummaryScene extends BaseResponsiveScene {
         new Phaser.Math.Vector2(tipX, tipY),
       );
       this.creatureGraphics.strokePoints(curve.getPoints(14), false, false);
+      this.tentacleTips.push({ x: tipX, y: tipY });
 
       this.creatureGraphics.fillStyle(0xb8fdff, 0.62);
       this.creatureGraphics.fillCircle(tipX, tipY, 1.8);
     }
+
+    this.drawGrabTentacleOverlay();
 
     /**
      * Codex: 触手基点のY位置を扇状に整えるための補助関数。
@@ -452,6 +566,35 @@ class SummaryScene extends BaseResponsiveScene {
     function bodyAnchorY(spread: number): number {
       return Math.sin(spread * 0.7) * 8 + 28;
     }
+  }
+
+  /**
+   * Codex: 捕食中の触手のみを強調し、対象まで伸びる演出線を描画する。
+   */
+  private drawGrabTentacleOverlay(): void {
+    if (!this.creatureGraphics || !this.grabSequence) {
+      return;
+    }
+
+    const fish = this.findFishById(this.grabSequence.fishId);
+    const tip = this.tentacleTips[this.grabSequence.tentacleIndex];
+    if (!fish || !tip) {
+      return;
+    }
+
+    const localFishX = (fish.x - this.creatureX) * Math.cos(-this.creatureFacing) - (fish.y - this.creatureY) * Math.sin(-this.creatureFacing);
+    const localFishY = (fish.x - this.creatureX) * Math.sin(-this.creatureFacing) + (fish.y - this.creatureY) * Math.cos(-this.creatureFacing);
+    const controlX = Phaser.Math.Linear(tip.x, localFishX, 0.55) + Math.sin(this.time.now * 0.012) * 10;
+    const controlY = Phaser.Math.Linear(tip.y, localFishY, 0.55) - 14;
+
+    const grabCurve = new Phaser.Curves.QuadraticBezier(
+      new Phaser.Math.Vector2(tip.x, tip.y),
+      new Phaser.Math.Vector2(controlX, controlY),
+      new Phaser.Math.Vector2(localFishX, localFishY),
+    );
+
+    this.creatureGraphics.lineStyle(4.5, 0xf8fdff, 0.95);
+    this.creatureGraphics.strokePoints(grabCurve.getPoints(20), false, false);
   }
 
   /**
@@ -496,7 +639,10 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private refreshUI(): void {
     const nextThreshold = GROWTH_THRESHOLDS[this.creatureStage] ?? 'MAX';
-    this.statusText?.setText(`捕食: ${this.consumedCount}   段階: ${this.creatureStage + 1}   次: ${nextThreshold}`);
+    const isMobile = this.layout.width < 640;
+    const actionLabel = this.grabSequence ? '触手捕獲中' : '追尾中';
+    const statusLine = `捕食 ${this.consumedCount} / 段階 ${this.creatureStage + 1} / 次 ${nextThreshold}`;
+    this.statusText?.setText(isMobile ? `${statusLine}\n${actionLabel}` : `${statusLine}   状態: ${actionLabel}`);
   }
 
   /**
@@ -527,6 +673,53 @@ class SummaryScene extends BaseResponsiveScene {
       ease: 'Quad.Out',
       onComplete: () => badge.destroy(),
     });
+  }
+
+  /**
+   * Codex: 魚IDをキーに配列から生存中の小魚を取得する。
+   */
+  private findFishById(id: number): Fish | undefined {
+    return this.fishes.find((fish) => fish.id === id);
+  }
+
+  /**
+   * Codex: 捕食中の魚に最も近い触手インデックスを選出する。
+   */
+  private findClosestTentacleToFish(target: Fish): number {
+    let bestIndex = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < this.tentacleTips.length; i += 1) {
+      const tipWorld = this.getTentacleTipWorldPosition(i);
+      const distance = Phaser.Math.Distance.Between(target.x, target.y, tipWorld.x, tipWorld.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        bestIndex = i;
+      }
+    }
+
+    return bestIndex;
+  }
+
+  /**
+   * Codex: 指定触手先端のローカル座標をワールド座標へ変換する。
+   */
+  private getTentacleTipWorldPosition(index: number): Phaser.Math.Vector2 {
+    const tip = this.tentacleTips[index] ?? { x: 0, y: 0 };
+    const rotatedX = tip.x * Math.cos(this.creatureFacing) - tip.y * Math.sin(this.creatureFacing);
+    const rotatedY = tip.x * Math.sin(this.creatureFacing) + tip.y * Math.cos(this.creatureFacing);
+    return new Phaser.Math.Vector2(this.creatureX + rotatedX, this.creatureY + rotatedY);
+  }
+
+  /**
+   * Codex: 生物の口元位置を算出し、捕食リトラクトの終点として利用する。
+   */
+  private getMouthWorldPosition(): Phaser.Math.Vector2 {
+    const mouthOffsetX = 44;
+    const mouthOffsetY = 8;
+    const rotatedX = mouthOffsetX * Math.cos(this.creatureFacing) - mouthOffsetY * Math.sin(this.creatureFacing);
+    const rotatedY = mouthOffsetX * Math.sin(this.creatureFacing) + mouthOffsetY * Math.cos(this.creatureFacing);
+    return new Phaser.Math.Vector2(this.creatureX + rotatedX, this.creatureY + rotatedY);
   }
 
   /**
