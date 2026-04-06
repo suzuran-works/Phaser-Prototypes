@@ -68,6 +68,17 @@ function normalizePackageName(rawId) {
 }
 
 /**
+ * Codex: README の GitHub Pages URL 用にリポジトリ名を整形する。
+ */
+function normalizeRepositoryNameForUrl(rawId) {
+  return rawId
+    .trim()
+    .replace(/[^A-Za-z0-9-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+/**
  * Codex: UTF-8 テキストを読み込む。
  */
 function readTextFile(targetPath) {
@@ -112,13 +123,13 @@ function updateHtmlTitle(htmlPath, title, dryRun) {
 /**
  * Codex: README の見出しと GitHub Pages 用 URL を初期化内容へ合わせる。
  */
-function updateReadme(readmePath, packageName, title, dryRun) {
+function updateReadme(readmePath, packageName, repositoryNameForUrl, title, dryRun) {
   const currentContent = readTextFile(readmePath);
   let nextContent = currentContent.replace(/^# .+$/m, `# ${title}`);
 
   nextContent = nextContent.replace(
     /(https:\/\/[^/\s`]+\.github\.io\/)[^/\s`]+(\/(?:page\d{2}\/)?)/g,
-    `$1${packageName}$2`,
+    `$1${repositoryNameForUrl || packageName}$2`,
   );
 
   return writeTextFile(readmePath, nextContent, dryRun);
@@ -157,6 +168,7 @@ function logSummary(changedFiles, dryRun) {
 function main() {
   const { id, title, dryRun } = parseArgs(process.argv.slice(2));
   const packageName = normalizePackageName(id);
+  const repositoryNameForUrl = normalizeRepositoryNameForUrl(id);
 
   if (!packageName) {
     throw new Error('Codex: 正規化後の package 名が空です。--id を見直してください。');
@@ -175,7 +187,7 @@ function main() {
   }
 
   const readmePath = path.join(REPO_ROOT, 'README.md');
-  if (updateReadme(readmePath, packageName, title, dryRun)) {
+  if (updateReadme(readmePath, packageName, repositoryNameForUrl, title, dryRun)) {
     changedFiles.push(readmePath);
   }
 
