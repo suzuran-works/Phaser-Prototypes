@@ -44,7 +44,7 @@ type GrabSequence = {
   fishId: number;
   tentacleIndex: number;
   progress: number;
-  phase: 'extend' | 'retract';
+  phase: 'extend' | 'retract' | 'chew';
 };
 
 type LockedTarget = {
@@ -366,6 +366,9 @@ class SummaryScene extends BaseResponsiveScene {
 
       fish.vx += Math.cos(fish.phase * 0.85) * 8 * deltaSec;
       fish.vy += Math.sin(fish.phase * 1.1) * 8 * deltaSec;
+      const fleeVector = this.computeFishFleeVector(fish);
+      fish.vx += fleeVector.x * deltaSec;
+      fish.vy += fleeVector.y * deltaSec;
 
       const velocityLength = Math.max(1, Math.hypot(fish.vx, fish.vy));
       fish.vx = (fish.vx / velocityLength) * fish.speed;
@@ -388,6 +391,40 @@ class SummaryScene extends BaseResponsiveScene {
       fish.sprite.setPosition(fish.x, fish.y);
       fish.sprite.setRotation(Math.atan2(fish.vy, fish.vx));
     }
+  }
+
+  /**
+   * Codex: 小魚が生物本体と触手先端から逃げるための反発ベクトルを算出する。
+   */
+  private computeFishFleeVector(fish: Fish): Phaser.Math.Vector2 {
+    let repelX = 0;
+    let repelY = 0;
+    const bodySafeRadius = 220 + this.creatureStage * 26;
+    const bodyDx = fish.x - this.creatureX;
+    const bodyDy = fish.y - this.creatureY;
+    const bodyDistance = Math.max(1, Math.hypot(bodyDx, bodyDy));
+
+    if (bodyDistance < bodySafeRadius) {
+      const rate = (1 - bodyDistance / bodySafeRadius) * (230 + this.creatureStage * 34);
+      repelX += (bodyDx / bodyDistance) * rate;
+      repelY += (bodyDy / bodyDistance) * rate;
+    }
+
+    const sensedTentacles = Math.min(this.tentacleTips.length, 7);
+    for (let i = 0; i < sensedTentacles; i += 1) {
+      const tipWorld = this.getTentacleTipWorldPosition(i);
+      const tipDx = fish.x - tipWorld.x;
+      const tipDy = fish.y - tipWorld.y;
+      const tipDistance = Math.max(1, Math.hypot(tipDx, tipDy));
+      const tipSafeRadius = 92 + this.creatureStage * 10;
+      if (tipDistance < tipSafeRadius) {
+        const rate = (1 - tipDistance / tipSafeRadius) * 140;
+        repelX += (tipDx / tipDistance) * rate;
+        repelY += (tipDy / tipDistance) * rate;
+      }
+    }
+
+    return new Phaser.Math.Vector2(repelX, repelY);
   }
 
   /**
@@ -452,13 +489,23 @@ class SummaryScene extends BaseResponsiveScene {
       if (this.grabSequence.progress >= 1) {
         this.grabSequence.phase = 'retract';
       }
-    } else {
+    } else if (this.grabSequence.phase === 'retract') {
       this.grabSequence.progress = Phaser.Math.Clamp(this.grabSequence.progress - deltaSec * 2.4, 0, 1);
       const retractLerp = Phaser.Math.Clamp(1 - this.grabSequence.progress, 0, 1);
       fish.x = Phaser.Math.Linear(fish.x, mouth.x, retractLerp);
       fish.y = Phaser.Math.Linear(fish.y, mouth.y, retractLerp);
 
       if (Phaser.Math.Distance.Between(fish.x, fish.y, mouth.x, mouth.y) < 12) {
+        this.grabSequence.phase = 'chew';
+        this.grabSequence.progress = 0;
+      }
+    } else {
+      this.grabSequence.progress = Phaser.Math.Clamp(this.grabSequence.progress + deltaSec * 2.3, 0, 1);
+      const chewPhase = this.grabSequence.progress * Math.PI * 5;
+      fish.x = mouth.x + Math.sin(chewPhase) * 7;
+      fish.y = mouth.y + Math.cos(chewPhase * 0.8) * 4;
+      fish.sprite.setScale(1 - this.grabSequence.progress * 0.6);
+      if (this.grabSequence.progress >= 1) {
         this.finishEating(fish);
       }
     }
@@ -557,26 +604,36 @@ class SummaryScene extends BaseResponsiveScene {
     this.tentacleTips = [];
 
     for (let i = 0; i < count; i += 1) {
-      const spread = (i / (count - 1 || 1)) * Math.PI - Math.PI * 0.5;
-      const baseX = Math.cos(spread) * 34;
-      const baseY = bodyAnchorY(spread);
-      const timeShift = this.time.now * 0.005 + i * 0.75;
+      const ratio = count === 1 ? 0.5 : i / (count - 1);
+      const baseSpread = Phaser.Math.Easing.Sine.InOut(ratio) * Math.PI - Math.PI * 0.5;
+      const organicOffset = Math.sin(i * 1.92 + this.creatureStage * 0.7) * 0.16;
+      const spread = baseSpread + organicOffset;
+      const baseX = Math.cos(spread) * (30 + Math.sin(i * 1.13) * 7);
+      const baseY = bodyAnchorY(spread, i);
+      const jitterSeed = Math.sin(i * 12.9898) * 43758.5453;
+      const jitter = jitterSeed - Math.floor(jitterSeed);
+      const swingWeight = 0.65 + jitter * 0.75;
+      const timeShift = this.time.now * (0.0045 + jitter * 0.0014) + i * (0.62 + jitter * 0.35);
+      const focusPull = this.grabSequence?.tentacleIndex === i ? 0.9 : 0.25;
 
-      const cp1X = baseX + Math.sin(timeShift) * 16;
-      const cp1Y = baseY + length * 0.28;
-      const tipX = baseX + Math.sin(timeShift * 1.4) * 30;
-      const tipY = baseY + length + Math.cos(timeShift) * 16;
+      const cp1X = baseX + Math.sin(timeShift) * (14 + 8 * swingWeight);
+      const cp1Y = baseY + length * (0.2 + jitter * 0.09);
+      const cp2X = baseX + Math.sin(timeShift * 1.2 + 0.8) * (26 + 18 * swingWeight) + focusPull * 10;
+      const cp2Y = baseY + length * (0.58 + jitter * 0.11);
+      const tipX = baseX + Math.sin(timeShift * 1.45 + jitter * 3) * (24 + 28 * swingWeight) + focusPull * 18;
+      const tipY = baseY + length * (0.92 + jitter * 0.14) + Math.cos(timeShift * 0.9) * (12 + 7 * swingWeight);
 
-      const curve = new Phaser.Curves.QuadraticBezier(
+      const curve = new Phaser.Curves.CubicBezier(
         new Phaser.Math.Vector2(baseX, baseY),
         new Phaser.Math.Vector2(cp1X, cp1Y),
+        new Phaser.Math.Vector2(cp2X, cp2Y),
         new Phaser.Math.Vector2(tipX, tipY),
       );
       const thickness = Phaser.Math.Linear(12, 4, i / count);
       this.creatureGraphics.lineStyle(thickness + 2, 0xdffcff, 0.22);
-      this.creatureGraphics.strokePoints(curve.getPoints(14), false, false);
+      this.creatureGraphics.strokePoints(curve.getPoints(18), false, false);
       this.creatureGraphics.lineStyle(thickness, color, 0.92);
-      this.creatureGraphics.strokePoints(curve.getPoints(14), false, false);
+      this.creatureGraphics.strokePoints(curve.getPoints(18), false, false);
       this.tentacleTips.push({ x: tipX, y: tipY });
 
       this.creatureGraphics.fillStyle(0xb8fdff, 0.62);
@@ -588,8 +645,8 @@ class SummaryScene extends BaseResponsiveScene {
     /**
      * Codex: 触手基点のY位置を扇状に整えるための補助関数。
      */
-    function bodyAnchorY(spread: number): number {
-      return Math.sin(spread * 0.7) * 8 + 28;
+    function bodyAnchorY(spread: number, index: number): number {
+      return Math.sin(spread * 0.7) * 8 + 24 + Math.cos(index * 0.91) * 5;
     }
   }
 
@@ -828,24 +885,74 @@ class SummaryScene extends BaseResponsiveScene {
 
     const eyeCount = Phaser.Math.Clamp(2 + this.creatureStage * 2, 2, 10);
     const timePhase = this.time.now * 0.007;
+    const gazeTarget = this.selectCreatureTarget();
+    const gazeLocal = gazeTarget ? this.worldToCreatureLocal(gazeTarget.x, gazeTarget.y) : undefined;
+    const placements = this.generateEyePlacements(eyeCount, bodyWidth, bodyHeight);
 
     for (let i = 0; i < eyeCount; i += 1) {
-      const row = Math.floor(i / 3);
-      const col = i % 3;
-      const spread = (col - 1) * bodyWidth * 0.12 + (row % 2 === 0 ? 0 : bodyWidth * 0.05);
-      const x = bodyWidth * 0.18 + spread;
-      const y = -bodyHeight * 0.2 + row * bodyHeight * 0.16;
-      const radius = 7 - row * 0.6;
+      const placement = placements[i];
+      const x = placement.x;
+      const y = placement.y + Math.sin(timePhase * 0.65 + i * 1.4) * 1.2;
+      const radius = placement.radius;
 
       this.creatureGraphics.fillStyle(0xffffff, 0.95);
       this.creatureGraphics.fillCircle(x, y, radius);
+
+      let pupilX = x + Math.sin(timePhase + i * 0.82) * 1.2;
+      let pupilY = y + Math.cos(timePhase * 0.9 + i * 0.64) * 0.8;
+      if (gazeLocal) {
+        const lookDx = gazeLocal.x - x;
+        const lookDy = gazeLocal.y - y;
+        const lookDistance = Math.max(1, Math.hypot(lookDx, lookDy));
+        const maxShift = radius * 0.44;
+        pupilX = x + (lookDx / lookDistance) * maxShift;
+        pupilY = y + (lookDy / lookDistance) * maxShift;
+      }
+
       this.creatureGraphics.fillStyle(0x0c2b43, 0.95);
-      this.creatureGraphics.fillCircle(
-        x + Math.sin(timePhase + i * 0.82) * 1.8,
-        y + Math.cos(timePhase * 0.9 + i * 0.64) * 1.1,
-        Math.max(2.2, radius * 0.45),
-      );
+      this.creatureGraphics.fillCircle(pupilX, pupilY, Math.max(2.2, radius * 0.45));
     }
+  }
+
+  /**
+   * Codex: 目の増殖位置を有機的な群生配置で生成し、過密衝突を避ける。
+   */
+  private generateEyePlacements(
+    eyeCount: number,
+    bodyWidth: number,
+    bodyHeight: number,
+  ): Array<{ x: number; y: number; radius: number }> {
+    const placements: Array<{ x: number; y: number; radius: number }> = [];
+    const goldenAngle = 2.399963229728653;
+    const centerX = bodyWidth * 0.16;
+    const centerY = -bodyHeight * 0.1;
+
+    for (let i = 0; i < eyeCount; i += 1) {
+      const ratio = (i + 1) / (eyeCount + 1);
+      const radiusBase = 7 - ratio * 2.2;
+      const spiralDistance = Math.sqrt(ratio) * bodyWidth * 0.22;
+      const jitter = this.computeStableNoise(i);
+      const angle = goldenAngle * i + jitter * 0.8;
+      const x = centerX + Math.cos(angle) * spiralDistance * (0.85 + jitter * 0.3);
+      const y = centerY + Math.sin(angle) * spiralDistance * 0.65;
+      const clampedX = Phaser.Math.Clamp(x, -bodyWidth * 0.22, bodyWidth * 0.42);
+      const clampedY = Phaser.Math.Clamp(y, -bodyHeight * 0.34, bodyHeight * 0.2);
+      placements.push({
+        x: clampedX,
+        y: clampedY,
+        radius: Phaser.Math.Clamp(radiusBase + jitter * 0.9, 4.2, 7.6),
+      });
+    }
+
+    return placements;
+  }
+
+  /**
+   * Codex: インデックス依存の安定ノイズを返し、有機配置の再現性を保つ。
+   */
+  private computeStableNoise(index: number): number {
+    const noise = Math.sin(index * 78.233 + this.creatureStage * 12.17) * 43758.5453;
+    return noise - Math.floor(noise);
   }
 
   /**
