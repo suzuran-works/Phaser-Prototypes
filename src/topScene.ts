@@ -40,6 +40,8 @@ type TopLayout = {
   buttons: Array<{ x: number; y: number; href: string; radius: number; strokeWidth: number }>;
 };
 
+const PAGE_LINKS = ['./page00/', './page01/', './page02/'] as const;
+
 class TopScene extends BaseResponsiveScene {
   public static readonly key = 'TopScene';
 
@@ -81,10 +83,13 @@ class TopScene extends BaseResponsiveScene {
 
     return {
       logo: { x: centerX, y: centerY, scale: logoScale },
-      buttons: [
-        { x: centerX - buttonGap / 2, y: navY, href: './page00/', radius: buttonRadius, strokeWidth },
-        { x: centerX + buttonGap / 2, y: navY, href: './page01/', radius: buttonRadius, strokeWidth },
-      ],
+      buttons: PAGE_LINKS.map((href, index) => ({
+        x: centerX + (index - (PAGE_LINKS.length - 1) / 2) * buttonGap,
+        y: navY,
+        href,
+        radius: buttonRadius,
+        strokeWidth,
+      })),
     };
   }
 

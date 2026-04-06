@@ -13,6 +13,7 @@ export default defineConfig({
         top: resolve(__dirname, 'index.html'),
         page00: resolve(__dirname, 'page00', 'index.html'),
         page01: resolve(__dirname, 'page01', 'index.html'),
+        page02: resolve(__dirname, 'page02', 'index.html'),
       },
     },
   },
