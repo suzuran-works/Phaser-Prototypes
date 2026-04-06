@@ -23,10 +23,10 @@ type OrbitBall = {
 };
 
 const INITIAL_BALL_COUNT = 14;
-const CORE_RADIUS = 30;
-const BASE_RADIUS = 13;
-const RADIUS_GROWTH = 2.1;
-const GRAVITY_STRENGTH = 300000;
+const CORE_RADIUS = 15;
+const BASE_RADIUS = 6.5;
+const RADIUS_GROWTH = 1.05;
+const GRAVITY_STRENGTH = 600000;
 const SOFTENING_DISTANCE = 36;
 
 class SummaryScene extends BaseResponsiveScene {
@@ -118,14 +118,14 @@ class SummaryScene extends BaseResponsiveScene {
       const spawn = this.pickSpawnPosition();
       const tangent = new Phaser.Math.Vector2(-(spawn.y - this.layout.centerY), spawn.x - this.layout.centerX).normalize();
       const randomDirection = Phaser.Math.FloatBetween(-1, 1);
-      const orbitSpeed = Phaser.Math.FloatBetween(90, 190);
+      const orbitSpeed = Phaser.Math.FloatBetween(180, 380);
 
       this.createBall({
         value: 1,
         position: spawn,
         velocity: tangent.scale(orbitSpeed * randomDirection).add(new Phaser.Math.Vector2(
-          Phaser.Math.Between(-45, 45),
-          Phaser.Math.Between(-45, 45),
+          Phaser.Math.Between(-90, 90),
+          Phaser.Math.Between(-90, 90),
         )),
       });
     }
