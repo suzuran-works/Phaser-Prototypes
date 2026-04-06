@@ -7,6 +7,9 @@ const CREATURE_NAME = '深海幻蛸 ネビュリオン';
 const MAX_FISH_COUNT = 24;
 const INITIAL_FISH_COUNT = 14;
 const FISH_RESPAWN_INTERVAL_MS = 760;
+const GRAB_COOLDOWN_MS = 5000;
+const GRAB_PROBE_DURATION_SEC = 1.8;
+const GRAB_STRIKE_DURATION_SEC = 0.22;
 const GROWTH_THRESHOLDS = [5, 11, 18, 28] as const;
 
 const STAGE_SHAPES = [
@@ -31,6 +34,7 @@ type Fish = {
   speed: number;
   phase: number;
   size: number;
+  palette: FishPalette;
   bornAt: number;
   sprite: Phaser.GameObjects.Container;
 };
@@ -44,13 +48,29 @@ type GrabSequence = {
   fishId: number;
   tentacleIndex: number;
   progress: number;
-  phase: 'extend' | 'retract' | 'chew';
+  phase: 'probe' | 'strike' | 'retract' | 'chew';
 };
 
 type LockedTarget = {
   fishId: number;
   lockUntil: number;
 };
+
+type FishPalette = {
+  body: number;
+  tail: number;
+  accent: number;
+  stripe: number;
+  eye: number;
+};
+
+const FISH_PALETTES: readonly FishPalette[] = [
+  { body: 0xff7aa2, tail: 0xffb15a, accent: 0xfff3b0, stripe: 0xff5f8f, eye: 0x3a2337 },
+  { body: 0x79f4ff, tail: 0x5eb4ff, accent: 0xe7fbff, stripe: 0x4ef0c4, eye: 0x10324b },
+  { body: 0xb5ff86, tail: 0x68e8a7, accent: 0xe8ffd0, stripe: 0x8ff26e, eye: 0x24412a },
+  { body: 0xffb1f8, tail: 0xa985ff, accent: 0xffe6ff, stripe: 0xff8edb, eye: 0x3b2645 },
+  { body: 0xffdd6a, tail: 0xff8d61, accent: 0xfff7c8, stripe: 0xffbb47, eye: 0x42321a },
+] as const;
 
 class SummaryScene extends BaseResponsiveScene {
   public static readonly key = 'Scripts03SummaryScene';
@@ -98,6 +118,12 @@ class SummaryScene extends BaseResponsiveScene {
   private lockedTarget?: LockedTarget;
 
   private nextGrabAllowedAt = 0;
+
+  private cruiseTargetX = 540;
+
+  private cruiseTargetY = 540;
+
+  private nextCruiseRetargetAt = 0;
 
   private titleText?: Phaser.GameObjects.Text;
 
@@ -319,8 +345,9 @@ class SummaryScene extends BaseResponsiveScene {
     const speed = Phaser.Math.FloatBetween(60, 124);
     const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
     const size = Phaser.Math.FloatBetween(0.82, 1.22);
+    const palette = FISH_PALETTES[Phaser.Math.Between(0, FISH_PALETTES.length - 1)];
 
-    const fishSprite = this.createFishSprite(size);
+    const fishSprite = this.createFishSprite(size, palette);
     fishSprite.setPosition(x, y);
 
     this.fishes.push({
@@ -332,6 +359,7 @@ class SummaryScene extends BaseResponsiveScene {
       speed,
       phase: Phaser.Math.FloatBetween(0, Math.PI * 2),
       size,
+      palette,
       bornAt: this.time.now,
       sprite: fishSprite,
     });
@@ -343,11 +371,13 @@ class SummaryScene extends BaseResponsiveScene {
   /**
    * Codex: 小魚の見た目を生成し、尾びれを含むシルエットを表現する。
    */
-  private createFishSprite(size: number): Phaser.GameObjects.Container {
-    const body = this.add.ellipse(0, 0, 18 * size, 11 * size, 0xffe08a, 0.95).setStrokeStyle(2, 0xfff4cf, 0.9);
-    const tail = this.add.triangle(-11 * size, 0, 0, 0, -9 * size, -5 * size, -9 * size, 5 * size, 0xffb36d, 0.92);
-    const eye = this.add.circle(5 * size, -2 * size, 1.7 * size, 0x233145, 0.95);
-    return this.add.container(0, 0, [tail, body, eye]);
+  private createFishSprite(size: number, palette: FishPalette): Phaser.GameObjects.Container {
+    const tail = this.add.triangle(-11 * size, 0, 0, 0, -9 * size, -5 * size, -9 * size, 5 * size, palette.tail, 0.95);
+    const body = this.add.ellipse(0, 0, 19 * size, 11.5 * size, palette.body, 0.95).setStrokeStyle(2, palette.accent, 0.92);
+    const stripe = this.add.ellipse(-1 * size, 0, 9 * size, 4 * size, palette.stripe, 0.7).setRotation(-0.22);
+    const fin = this.add.triangle(-1 * size, -4 * size, 0, 0, 6 * size, -1.5 * size, 2 * size, -6 * size, palette.accent, 0.74);
+    const eye = this.add.circle(5 * size, -2 * size, 1.8 * size, palette.eye, 0.95);
+    return this.add.container(0, 0, [tail, body, stripe, fin, eye]);
   }
 
   /**
@@ -431,22 +461,25 @@ class SummaryScene extends BaseResponsiveScene {
    * Codex: 狙いを定めた小魚へ向けて、生物を有機的に滑走させる。
    */
   private moveCreature(deltaSec: number): void {
+    this.updateCruiseTargetIfNeeded();
+
+    const driftDx = this.cruiseTargetX - this.creatureX;
+    const driftDy = this.cruiseTargetY - this.creatureY;
+    const driftDistance = Math.max(1, Math.hypot(driftDx, driftDy));
+    const driftSpeed = 42 + this.creatureStage * 4;
+    let desiredVX = (driftDx / driftDistance) * driftSpeed + Math.cos(this.time.now * 0.0015) * 14;
+    let desiredVY = (driftDy / driftDistance) * driftSpeed + Math.sin(this.time.now * 0.0012) * 12;
     const target = this.selectCreatureTarget();
-
     if (target) {
-      const dx = target.x - this.creatureX;
-      const dy = target.y - this.creatureY;
-      const distance = Math.max(1, Math.hypot(dx, dy));
-      const speed = 86 + this.creatureStage * 11;
-      const desiredVX = (dx / distance) * speed;
-      const desiredVY = (dy / distance) * speed;
-
-      this.creatureVX = Phaser.Math.Linear(this.creatureVX, desiredVX, 0.052);
-      this.creatureVY = Phaser.Math.Linear(this.creatureVY, desiredVY, 0.04);
-    } else {
-      this.creatureVX = Phaser.Math.Linear(this.creatureVX, Math.cos(this.time.now * 0.0014) * 24, 0.04);
-      this.creatureVY = Phaser.Math.Linear(this.creatureVY, Math.sin(this.time.now * 0.0012) * 22, 0.035);
+      const chaseDx = target.x - this.creatureX;
+      const chaseDy = target.y - this.creatureY;
+      const chaseDistance = Math.max(1, Math.hypot(chaseDx, chaseDy));
+      desiredVX += (chaseDx / chaseDistance) * 16;
+      desiredVY += (chaseDy / chaseDistance) * 14;
     }
+
+    this.creatureVX = Phaser.Math.Linear(this.creatureVX, desiredVX, 0.03);
+    this.creatureVY = Phaser.Math.Linear(this.creatureVY, desiredVY, 0.03);
 
     this.creatureX = Phaser.Math.Clamp(this.creatureX + this.creatureVX * deltaSec, 84, this.layout.width - 84);
     this.creatureY = Phaser.Math.Clamp(this.creatureY + this.creatureVY * deltaSec, 84, this.layout.height - 84);
@@ -479,15 +512,29 @@ class SummaryScene extends BaseResponsiveScene {
     }
 
     const mouth = this.getMouthWorldPosition();
-    const tipWorld = this.getTentacleTipWorldPosition(this.grabSequence.tentacleIndex);
-    const tipToFishLerp = Phaser.Math.Clamp(this.grabSequence.progress * 1.6, 0, 1);
 
-    if (this.grabSequence.phase === 'extend') {
-      this.grabSequence.progress = Phaser.Math.Clamp(this.grabSequence.progress + deltaSec * 2.8, 0, 1);
-      fish.x = Phaser.Math.Linear(tipWorld.x, fish.x, 1 - tipToFishLerp);
-      fish.y = Phaser.Math.Linear(tipWorld.y, fish.y, 1 - tipToFishLerp);
+    if (this.grabSequence.phase === 'probe') {
+      this.grabSequence.progress = Phaser.Math.Clamp(
+        this.grabSequence.progress + deltaSec / GRAB_PROBE_DURATION_SEC,
+        0,
+        1,
+      );
+      if (this.grabSequence.progress >= 1) {
+        this.grabSequence.phase = 'strike';
+        this.grabSequence.progress = 0;
+      }
+    } else if (this.grabSequence.phase === 'strike') {
+      this.grabSequence.progress = Phaser.Math.Clamp(
+        this.grabSequence.progress + deltaSec / GRAB_STRIKE_DURATION_SEC,
+        0,
+        1,
+      );
+      const tipWorld = this.getTentacleTipWorldPosition(this.grabSequence.tentacleIndex);
+      fish.x = Phaser.Math.Linear(fish.x, tipWorld.x, this.grabSequence.progress);
+      fish.y = Phaser.Math.Linear(fish.y, tipWorld.y, this.grabSequence.progress);
       if (this.grabSequence.progress >= 1) {
         this.grabSequence.phase = 'retract';
+        this.grabSequence.progress = 1;
       }
     } else if (this.grabSequence.phase === 'retract') {
       this.grabSequence.progress = Phaser.Math.Clamp(this.grabSequence.progress - deltaSec * 2.4, 0, 1);
@@ -538,9 +585,9 @@ class SummaryScene extends BaseResponsiveScene {
       fishId: target.id,
       tentacleIndex,
       progress: 0,
-      phase: 'extend',
+      phase: 'probe',
     };
-    this.nextGrabAllowedAt = this.time.now + Phaser.Math.Between(400, 900);
+    this.nextGrabAllowedAt = this.time.now + GRAB_COOLDOWN_MS + Phaser.Math.Between(-600, 900);
   }
 
   /**
@@ -584,6 +631,7 @@ class SummaryScene extends BaseResponsiveScene {
     this.creatureGraphics.lineStyle(4, 0xd4f7ff, 0.86);
     this.creatureGraphics.fillEllipse(0, 0, bodyWidth, bodyHeight);
     this.creatureGraphics.strokeEllipse(0, 0, bodyWidth, bodyHeight);
+    this.drawBodyComplexity(bodyWidth, bodyHeight, stageProfile.color);
 
     this.drawTentacles(stageProfile.tentacles, stageProfile.tentacleLength, stageProfile.color);
 
@@ -620,8 +668,17 @@ class SummaryScene extends BaseResponsiveScene {
       const cp1Y = baseY + length * (0.2 + jitter * 0.09);
       const cp2X = baseX + Math.sin(timeShift * 1.2 + 0.8) * (26 + 18 * swingWeight) + focusPull * 10;
       const cp2Y = baseY + length * (0.58 + jitter * 0.11);
-      const tipX = baseX + Math.sin(timeShift * 1.45 + jitter * 3) * (24 + 28 * swingWeight) + focusPull * 18;
-      const tipY = baseY + length * (0.92 + jitter * 0.14) + Math.cos(timeShift * 0.9) * (12 + 7 * swingWeight);
+      let tipX = baseX + Math.sin(timeShift * 1.45 + jitter * 3) * (24 + 28 * swingWeight) + focusPull * 18;
+      let tipY = baseY + length * (0.92 + jitter * 0.14) + Math.cos(timeShift * 0.9) * (12 + 7 * swingWeight);
+      const grabReach = this.computeGrabTentacleReach(i);
+      if (grabReach > 0) {
+        const fish = this.findFishById(this.grabSequence!.fishId);
+        if (fish) {
+          const fishLocal = this.worldToCreatureLocal(fish.x, fish.y);
+          tipX = Phaser.Math.Linear(tipX, fishLocal.x, grabReach);
+          tipY = Phaser.Math.Linear(tipY, fishLocal.y, grabReach);
+        }
+      }
 
       const curve = new Phaser.Curves.CubicBezier(
         new Phaser.Math.Vector2(baseX, baseY),
@@ -678,6 +735,29 @@ class SummaryScene extends BaseResponsiveScene {
 
     this.creatureGraphics.lineStyle(4.5, 0xf8fdff, 0.95);
     this.creatureGraphics.strokePoints(grabCurve.getPoints(20), false, false);
+  }
+
+  /**
+   * Codex: 捕食段階に応じて触手先端の到達率を返し、探り→急襲を可視化する。
+   */
+  private computeGrabTentacleReach(tentacleIndex: number): number {
+    if (!this.grabSequence || this.grabSequence.tentacleIndex !== tentacleIndex) {
+      return 0;
+    }
+
+    if (this.grabSequence.phase === 'probe') {
+      return Phaser.Math.Easing.Sine.Out(this.grabSequence.progress) * 0.55;
+    }
+
+    if (this.grabSequence.phase === 'strike') {
+      return 0.55 + Phaser.Math.Easing.Back.Out(this.grabSequence.progress) * 0.5;
+    }
+
+    if (this.grabSequence.phase === 'retract') {
+      return this.grabSequence.progress;
+    }
+
+    return 0.08;
   }
 
   /**
@@ -824,9 +904,23 @@ class SummaryScene extends BaseResponsiveScene {
 
     this.lockedTarget = {
       fishId: candidate.id,
-      lockUntil: this.time.now + Phaser.Math.Between(700, 1800),
+      lockUntil: this.time.now + Phaser.Math.Between(1700, 3400),
     };
     return candidate;
+  }
+
+  /**
+   * Codex: 一定間隔で巡航先を更新し、生き物が常にゆったり漂う挙動を維持する。
+   */
+  private updateCruiseTargetIfNeeded(): void {
+    if (this.time.now < this.nextCruiseRetargetAt) {
+      return;
+    }
+
+    const margin = 120;
+    this.cruiseTargetX = Phaser.Math.Between(margin, this.layout.width - margin);
+    this.cruiseTargetY = Phaser.Math.Between(margin, this.layout.height - margin);
+    this.nextCruiseRetargetAt = this.time.now + Phaser.Math.Between(2400, 4200);
   }
 
   /**
@@ -964,7 +1058,7 @@ class SummaryScene extends BaseResponsiveScene {
     }
 
     for (const fish of this.fishes) {
-      fish.sprite = this.createFishSprite(fish.size);
+      fish.sprite = this.createFishSprite(fish.size, fish.palette);
       fish.sprite.setPosition(fish.x, fish.y);
       fishLayerSafeAdd(this.fishLayer, fish.sprite);
     }
@@ -975,6 +1069,50 @@ class SummaryScene extends BaseResponsiveScene {
     function fishLayerSafeAdd(layer: Phaser.GameObjects.Container, sprite: Phaser.GameObjects.Container): void {
       layer.add(sprite);
     }
+  }
+
+  /**
+   * Codex: 外套膜のひだ・発光斑・鰭を重ね、生き物の造形密度を高める。
+   */
+  private drawBodyComplexity(bodyWidth: number, bodyHeight: number, stageColor: number): void {
+    if (!this.creatureGraphics) {
+      return;
+    }
+
+    const time = this.time.now * 0.0038;
+    this.creatureGraphics.lineStyle(3, 0xffffff, 0.26);
+    for (let i = 0; i < 4; i += 1) {
+      const ridgeY = -bodyHeight * 0.22 + i * bodyHeight * 0.14;
+      const ridgeW = bodyWidth * (0.45 + i * 0.08);
+      this.creatureGraphics.strokeEllipse(bodyWidth * 0.06, ridgeY, ridgeW, bodyHeight * 0.13);
+    }
+
+    for (let i = 0; i < 6; i += 1) {
+      const ratio = i / 5;
+      const spotX = Phaser.Math.Linear(-bodyWidth * 0.2, bodyWidth * 0.32, ratio);
+      const spotY = Math.sin(time + i * 1.37) * bodyHeight * 0.16;
+      const spotRadius = Phaser.Math.Linear(4, 8, 1 - ratio);
+      this.creatureGraphics.fillStyle(0xd5ffff, 0.36);
+      this.creatureGraphics.fillCircle(spotX, spotY, spotRadius);
+    }
+
+    this.creatureGraphics.fillStyle(stageColor, 0.32);
+    this.creatureGraphics.fillTriangle(
+      -bodyWidth * 0.36,
+      -bodyHeight * 0.08,
+      -bodyWidth * 0.55,
+      bodyHeight * 0.18,
+      -bodyWidth * 0.12,
+      bodyHeight * 0.14,
+    );
+    this.creatureGraphics.fillTriangle(
+      bodyWidth * 0.26,
+      -bodyHeight * 0.1,
+      bodyWidth * 0.54,
+      bodyHeight * 0.1,
+      bodyWidth * 0.16,
+      bodyHeight * 0.18,
+    );
   }
 
   /**
