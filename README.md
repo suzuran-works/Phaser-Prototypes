@@ -1,4 +1,4 @@
-# Phaser-Template
+# Phaser Prototypes
 
 Phaser 3 + Vite + TypeScript で、複数ページ構成の試作をすぐ始めるためのテンプレートです。  
 トップページからサンプルページへ遷移しながら、シーン構成や UI のたたき台を段階的に育てられるようにしています。
@@ -65,9 +65,9 @@ npm run preview
 
 ### 公開 URL
 
-- トップページ: `https://suzuran-works.github.io/Phaser-Template/`
-- page00: `https://suzuran-works.github.io/Phaser-Template/page00/`
-- page01: `https://suzuran-works.github.io/Phaser-Template/page01/`
+- トップページ: `https://suzuran-works.github.io/phaser-prototypes/`
+- page00: `https://suzuran-works.github.io/phaser-prototypes/page00/`
+- page01: `https://suzuran-works.github.io/phaser-prototypes/page01/`
 
 ## ページ構成
 
