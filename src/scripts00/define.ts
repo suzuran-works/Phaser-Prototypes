@@ -1,4 +1,4 @@
 export const TITLE = 'page00';
-export const SUBTITLE = '会話画面や UI 実験用のページ';
-export const BACKGROUND_COLOR = 0x123524;
-export const ACCENT_COLOR = 0x38bdf8;
+export const SUBTITLE = '海洋生物育成ゲーム';
+export const BACKGROUND_COLOR = 0x0a1f5c;
+export const ACCENT_COLOR = 0x67e8f9;
