@@ -65,9 +65,9 @@ npm run preview
 
 ### 公開 URL
 
-- トップページ: `https://suzuran-works.github.io/phaser-prototypes/`
-- page00: `https://suzuran-works.github.io/phaser-prototypes/page00/`
-- page01: `https://suzuran-works.github.io/phaser-prototypes/page01/`
+- トップページ: `https://suzuran-works.github.io/Phaser-Prototypes/`
+- page00: `https://suzuran-works.github.io/Phaser-Prototypes/page00/`
+- page01: `https://suzuran-works.github.io/Phaser-Prototypes/page01/`
 
 ## ページ構成
 
