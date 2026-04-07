@@ -10,6 +10,8 @@ type GhostAgent = {
   tier: number;
   size: number;
   value: number;
+  movementMode: 'wander' | 'orbit' | 'dash';
+  phase: number;
 };
 
 type SceneLayout = {
@@ -52,6 +54,10 @@ class SummaryScene extends BaseResponsiveScene {
   private autoTapTimer = 0;
 
   private ritualTapCount = 0;
+
+  private readonly ghostSoftCap = 28;
+
+  private pointerTarget = new Phaser.Math.Vector2(540, 540);
 
   /**
    * GPT-5.3-Codex: 幽霊タップ合成クリッカーのメインシーンを初期化する。
@@ -105,6 +111,7 @@ class SummaryScene extends BaseResponsiveScene {
 
     let passiveIncome = 0;
     this.ghosts.forEach((ghost) => {
+      this.updateGhostMovementPattern(ghost, dt);
       ghost.sprite.x += ghost.vx * dt;
       ghost.sprite.y += ghost.vy * dt;
       this.reflectGhostIfNeeded(ghost);
@@ -128,7 +135,7 @@ class SummaryScene extends BaseResponsiveScene {
 
     this.statusText.setText([
       `SOUL: ${Math.floor(this.score)}`,
-      `GHOSTS: ${this.ghosts.length} / RITUAL TAP: ${this.ritualTapCount}`,
+      `GHOSTS: ${this.ghosts.length}/${this.ghostSoftCap} / RITUAL TAP: ${this.ritualTapCount}`,
       `召喚Lv.${this.summonLevel}  合成Lv.${this.mergeLevel}  AUTO Lv.${this.autoTapLevel}`,
     ]);
   }
@@ -166,16 +173,20 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private performRitualTap(x: number, y: number, isAuto = false): void {
     this.ritualTapCount += 1;
+    this.pointerTarget.set(x, y);
 
-    const spawnChance = Math.max(0.35, 0.72 - this.mergeLevel * 0.03);
+    const pressure = Phaser.Math.Clamp(this.ghosts.length / this.ghostSoftCap, 0, 1);
+    const spawnChance = Phaser.Math.Clamp(0.78 - pressure * 0.52 - this.mergeLevel * 0.03, 0.2, 0.8);
     const shouldSpawn = this.ghosts.length < 2 || Math.random() < spawnChance;
 
     if (shouldSpawn) {
-      const spawnCount = Math.max(1, Math.floor(this.summonLevel / 2));
+      const spawnCount = this.computeSummonCount();
       this.spawnGhost(spawnCount, x, y);
     } else if (!this.tryMergeNearestGhost(x, y)) {
       this.spawnGhost(1, x, y);
     }
+
+    this.resolveOverpopulation();
 
     if (!isAuto) {
       this.tweens.add({
@@ -220,6 +231,8 @@ class SummaryScene extends BaseResponsiveScene {
         tier,
         size,
         value: 1.2 + tier * tier * 0.75,
+        movementMode: this.pickMovementMode(),
+        phase: Phaser.Math.FloatBetween(0, Math.PI * 2),
       };
 
       this.ghosts.push(ghost);
@@ -289,7 +302,126 @@ class SummaryScene extends BaseResponsiveScene {
       tier,
       size,
       value: 1.2 + tier * tier * 0.9,
+      movementMode: 'dash',
+      phase: Phaser.Math.FloatBetween(0, Math.PI * 2),
     });
+  }
+
+  /**
+   * GPT-5.3-Codex: 召喚数を状況に応じて制御し、増殖しすぎを防ぎながら気持ちよさを維持する。
+   */
+  private computeSummonCount(): number {
+    const baseCount = Math.max(1, Math.floor(this.summonLevel / 2));
+    if (this.ghosts.length >= this.ghostSoftCap) {
+      return 1;
+    }
+
+    if (this.ghosts.length >= this.ghostSoftCap * 0.8) {
+      return Math.min(2, baseCount);
+    }
+
+    return baseCount;
+  }
+
+  /**
+   * GPT-5.3-Codex: 幽霊数が上限を超えた分を自動圧縮してボーナス化し、プレイヤー利益へ変換する。
+   */
+  private resolveOverpopulation(): void {
+    if (this.ghosts.length <= this.ghostSoftCap) {
+      return;
+    }
+
+    const overflow = this.ghosts.length - this.ghostSoftCap;
+    const soulBonus = overflow * (4 + this.mergeLevel * 0.8);
+    this.score += soulBonus;
+
+    for (let index = 0; index < overflow; index += 1) {
+      const weakest = this.pickWeakestGhost();
+      if (!weakest) {
+        break;
+      }
+
+      this.spawnCompressionEffect(weakest.sprite.x, weakest.sprite.y);
+      this.removeGhost(weakest);
+    }
+  }
+
+  /**
+   * GPT-5.3-Codex: 幽霊の重みを判定して最も弱い個体を返す。
+   */
+  private pickWeakestGhost(): GhostAgent | null {
+    if (this.ghosts.length <= 0) {
+      return null;
+    }
+
+    return this.ghosts.reduce((weakest, current) => (current.value < weakest.value ? current : weakest));
+  }
+
+  /**
+   * GPT-5.3-Codex: 圧縮時の視覚フィードバックを出し、得した感覚を強める。
+   */
+  private spawnCompressionEffect(x: number, y: number): void {
+    const fx = this.add.text(x, y, '✨', {
+      fontFamily: 'sans-serif',
+      fontSize: '28px',
+      color: '#fef08a',
+    }).setOrigin(0.5);
+
+    this.tweens.add({
+      targets: fx,
+      alpha: 0,
+      y: y - 38,
+      duration: 260,
+      ease: 'Cubic.Out',
+      onComplete: () => fx.destroy(),
+    });
+  }
+
+  /**
+   * GPT-5.3-Codex: 幽霊の移動タイプをランダムに割り当て、群れの動きに変化を出す。
+   */
+  private pickMovementMode(): 'wander' | 'orbit' | 'dash' {
+    const roll = Math.random();
+    if (roll < 0.45) {
+      return 'wander';
+    }
+
+    if (roll < 0.78) {
+      return 'orbit';
+    }
+
+    return 'dash';
+  }
+
+  /**
+   * GPT-5.3-Codex: 移動タイプごとの速度補正を行い、幽霊挙動をより個性的にする。
+   */
+  private updateGhostMovementPattern(ghost: GhostAgent, dt: number): void {
+    ghost.phase += dt * (0.6 + ghost.tier * 0.05);
+
+    if (ghost.movementMode === 'wander') {
+      // GPT-5.3-Codex: 緩い蛇行で漂う挙動を作る。
+      ghost.vx += Math.cos(ghost.phase * 1.7) * 4.8 * dt;
+      ghost.vy += Math.sin(ghost.phase * 2.1) * 4.8 * dt;
+    } else if (ghost.movementMode === 'orbit') {
+      // GPT-5.3-Codex: タップ中心の周回運動に吸い寄せを混ぜる。
+      const towardX = this.pointerTarget.x - ghost.sprite.x;
+      const towardY = this.pointerTarget.y - ghost.sprite.y;
+      ghost.vx += towardX * dt * 0.35 + Math.cos(ghost.phase * 2.8) * 6.2 * dt;
+      ghost.vy += towardY * dt * 0.35 + Math.sin(ghost.phase * 2.8) * 6.2 * dt;
+    } else {
+      // GPT-5.3-Codex: 突進と減速を繰り返すメリハリ挙動を作る。
+      const pulse = 1 + Math.sin(ghost.phase * 4.6) * 0.65;
+      ghost.vx *= 1 + pulse * 0.015;
+      ghost.vy *= 1 + pulse * 0.015;
+    }
+
+    const maxSpeed = 170 + ghost.tier * 11;
+    const speed = Math.hypot(ghost.vx, ghost.vy);
+    if (speed > maxSpeed) {
+      ghost.vx = (ghost.vx / speed) * maxSpeed;
+      ghost.vy = (ghost.vy / speed) * maxSpeed;
+    }
   }
 
   /**
