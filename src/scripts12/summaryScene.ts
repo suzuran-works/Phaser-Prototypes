@@ -86,8 +86,8 @@ class SummaryScene extends BaseResponsiveScene {
       .setStrokeStyle(4, 0x60a5fa, 0.8)
       .setOrigin(0, 0);
 
-    this.bindResponsiveLayout();
     this.createSingleGeometry();
+    this.bindResponsiveLayout();
 
     this.input.on('pointerdown', () => {
       this.feedEvolution(20);
