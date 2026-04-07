@@ -7,7 +7,7 @@ type HiveCell = {
   x: number;
   y: number;
   size: number;
-  built: boolean;
+  honey: number;
 };
 
 type BeeAgent = {
@@ -15,7 +15,10 @@ type BeeAgent = {
   y: number;
   vx: number;
   vy: number;
-  carryingWax: boolean;
+  carryingNectar: boolean;
+  noiseSeed: number;
+  homeCellIndex: number | null;
+  bornTimer: number;
 };
 
 type SceneLayout = {
@@ -49,7 +52,11 @@ class SummaryScene extends BaseResponsiveScene {
 
   private bees: BeeAgent[] = [];
 
-  private builtCount = 0;
+  private buildExpansionTimer = 0;
+
+  private birthTimer = 0;
+
+  private expansionStep = 0;
 
   /**
    * GPT-5.3-Codex: 蜂の巣観察シーンを初期化する。
@@ -93,29 +100,41 @@ class SummaryScene extends BaseResponsiveScene {
     const dt = Math.min(delta / 1000, 0.05);
 
     this.bees.forEach((bee) => {
-      const targetX = bee.carryingWax ? this.layout.hiveX : this.layout.width * 0.5;
-      const targetY = bee.carryingWax ? this.layout.hiveY : this.layout.flowerY;
+      bee.bornTimer = Math.max(0, bee.bornTimer - dt);
+
+      const targetCell = bee.homeCellIndex !== null ? this.cells[bee.homeCellIndex] : null;
+      const targetX = bee.carryingNectar ? (targetCell?.x ?? this.layout.hiveX) : this.layout.width * 0.5;
+      const targetY = bee.carryingNectar ? (targetCell?.y ?? this.layout.hiveY) : this.layout.flowerY;
       const dx = targetX - bee.x;
       const dy = targetY - bee.y;
       const distance = Math.hypot(dx, dy) + 1e-6;
+      const wobbleX = Math.sin(_time * 0.0015 + bee.noiseSeed) * 42;
+      const wobbleY = Math.cos(_time * 0.0012 + bee.noiseSeed * 0.7) * 30;
 
-      bee.vx += (dx / distance) * dt * 180;
-      bee.vy += (dy / distance) * dt * 180;
-      bee.vx *= 0.92;
-      bee.vy *= 0.92;
+      // GPT-5.3-Codex: 速度を抑えつつノイズを混ぜ、単調でない緩やかな飛行にする。
+      bee.vx += (dx / distance) * dt * 92 + wobbleX * dt;
+      bee.vy += (dy / distance) * dt * 92 + wobbleY * dt;
+      bee.vx *= 0.9;
+      bee.vy *= 0.9;
 
-      bee.x += bee.vx * dt * 60;
-      bee.y += bee.vy * dt * 60;
+      bee.x += bee.vx * dt * 34;
+      bee.y += bee.vy * dt * 34;
 
-      // GPT-5.3-Codex: 目的地到達時に花粉採集と巣への搬入を切り替える。
-      if (!bee.carryingWax && Math.abs(bee.y - this.layout.flowerY) < 24) {
-        bee.carryingWax = true;
-      } else if (bee.carryingWax && Math.abs(bee.y - this.layout.hiveY) < 30) {
-        bee.carryingWax = false;
-        this.buildNextCell();
+      // GPT-5.3-Codex: 採蜜と搬入の切り替えを緩やかなテンポで制御する。
+      if (!bee.carryingNectar && Math.abs(bee.y - this.layout.flowerY) < 24) {
+        bee.carryingNectar = true;
+        bee.homeCellIndex = this.pickDepositableCell();
+      } else if (bee.carryingNectar && distance < 24) {
+        bee.carryingNectar = false;
+        this.depositNectar(bee.homeCellIndex);
+        bee.homeCellIndex = null;
       }
     });
 
+    // GPT-5.3-Codex: 巣が満杯になったら一定間隔で増築する。
+    this.updateExpansion(dt);
+    // GPT-5.3-Codex: 満たされた巣穴から蜂が誕生し、巣穴を空に戻す。
+    this.updateBirth(dt);
     this.drawScene();
   }
 
@@ -138,7 +157,11 @@ class SummaryScene extends BaseResponsiveScene {
    */
   protected renderLayout(layout: SceneLayout): void {
     this.layout = layout;
+    this.expansionStep = 0;
+    this.buildExpansionTimer = 0;
+    this.birthTimer = 0;
     this.cells = this.createHexCells(4, 5);
+    this.bees = this.createBees(Math.max(9, this.bees.length || 9));
     this.drawScene();
   }
 
@@ -159,7 +182,7 @@ class SummaryScene extends BaseResponsiveScene {
           x,
           y,
           size,
-          built: false,
+          honey: 0,
         });
       }
     }
@@ -176,20 +199,98 @@ class SummaryScene extends BaseResponsiveScene {
       y: this.layout.flowerY + Math.sin((index / Math.max(1, count)) * Math.PI * 2) * 36,
       vx: 0,
       vy: 0,
-      carryingWax: false,
+      carryingNectar: false,
+      noiseSeed: Math.random() * Math.PI * 2,
+      homeCellIndex: null,
+      bornTimer: 0,
     }));
   }
 
   /**
-   * GPT-5.3-Codex: 未完成セルを1つずつ完成状態に進める。
+   * GPT-5.3-Codex: 蜜を入れられる巣穴を選ぶ。
    */
-  private buildNextCell(): void {
-    const nextCell = this.cells.find((cell) => !cell.built);
-    if (!nextCell) {
+  private pickDepositableCell(): number | null {
+    const availableIndices = this.cells
+      .map((cell, index) => ({ cell, index }))
+      .filter(({ cell }) => cell.honey < 1)
+      .map(({ index }) => index);
+    if (availableIndices.length === 0) {
+      return null;
+    }
+    return Phaser.Utils.Array.GetRandom(availableIndices);
+  }
+
+  /**
+   * GPT-5.3-Codex: 蜜の搬入で巣穴の充填率を上げる。
+   */
+  private depositNectar(cellIndex: number | null): void {
+    if (cellIndex === null || !this.cells[cellIndex]) {
       return;
     }
-    nextCell.built = true;
-    this.builtCount = Math.min(this.cells.length, this.builtCount + 1);
+    this.cells[cellIndex].honey = Math.min(1, this.cells[cellIndex].honey + 0.25);
+  }
+
+  /**
+   * GPT-5.3-Codex: 全巣穴が満たされた後に一定周期で巣を増築する。
+   */
+  private updateExpansion(dt: number): void {
+    if (!this.cells.every((cell) => cell.honey >= 1)) {
+      this.buildExpansionTimer = 0;
+      return;
+    }
+    this.buildExpansionTimer += dt;
+    if (this.buildExpansionTimer < 8) {
+      return;
+    }
+    this.buildExpansionTimer = 0;
+    this.expansionStep += 1;
+    const nextRows = 4 + Math.floor(this.expansionStep / 3);
+    const nextCols = 5 + (this.expansionStep % 3);
+    const previousCells = this.cells;
+    this.cells = this.createHexCells(nextRows, nextCols);
+    this.cells.forEach((cell, index) => {
+      cell.honey = previousCells[index]?.honey ?? 0;
+    });
+  }
+
+  /**
+   * GPT-5.3-Codex: 満杯セルから定期的に蜂を誕生させ、セルを空に戻す。
+   */
+  private updateBirth(dt: number): void {
+    this.birthTimer += dt;
+    if (this.birthTimer < 6) {
+      return;
+    }
+    this.birthTimer = 0;
+    const fullCandidates = this.cells
+      .map((cell, index) => ({ cell, index }))
+      .filter(({ cell }) => cell.honey >= 1);
+    if (fullCandidates.length === 0) {
+      return;
+    }
+    const selected = Phaser.Utils.Array.GetRandom(fullCandidates);
+    selected.cell.honey = 0;
+    this.spawnBeeFromCell(selected.index);
+  }
+
+  /**
+   * GPT-5.3-Codex: 指定セルから新しい蜂を誕生させる。
+   */
+  private spawnBeeFromCell(cellIndex: number): void {
+    const sourceCell = this.cells[cellIndex];
+    if (!sourceCell) {
+      return;
+    }
+    this.bees.push({
+      x: sourceCell.x,
+      y: sourceCell.y,
+      vx: Phaser.Math.FloatBetween(-12, 12),
+      vy: Phaser.Math.FloatBetween(-26, -8),
+      carryingNectar: false,
+      noiseSeed: Math.random() * Math.PI * 2,
+      homeCellIndex: null,
+      bornTimer: 1.5,
+    });
   }
 
   /**
@@ -209,7 +310,7 @@ class SummaryScene extends BaseResponsiveScene {
     this.titleText.setPosition(this.layout.width * 0.5, 28);
     this.statusText
       .setPosition(this.layout.width * 0.5, this.layout.height * 0.66)
-      .setText(`巣の完成度: ${this.builtCount}/${this.cells.length}\n蜂たちは花畑と巣を往復して、少しずつ巣房を作っています。`);
+      .setText(`蜜が埋まった巣穴: ${this.cells.filter((cell) => cell.honey >= 1).length}/${this.cells.length}\n満杯後は増築し、満杯セルから新しい蜂が誕生します。`);
   }
 
   /**
@@ -239,7 +340,17 @@ class SummaryScene extends BaseResponsiveScene {
   private drawHiveCells(): void {
     this.cells.forEach((cell) => {
       this.graphics.lineStyle(2, 0x78350f, 0.95);
-      this.graphics.fillStyle(cell.built ? 0xfacc15 : 0xffedd5, cell.built ? 0.95 : 0.75);
+      const fillAlpha = 0.35 + cell.honey * 0.6;
+      const fillColor = Phaser.Display.Color.Interpolate.ColorWithColor(
+        new Phaser.Display.Color(255, 237, 213),
+        new Phaser.Display.Color(250, 204, 21),
+        100,
+        Math.round(cell.honey * 100),
+      );
+      this.graphics.fillStyle(
+        Phaser.Display.Color.GetColor(fillColor.r, fillColor.g, fillColor.b),
+        fillAlpha,
+      );
       this.drawHex(cell.x, cell.y, cell.size);
     });
   }
@@ -258,9 +369,14 @@ class SummaryScene extends BaseResponsiveScene {
       this.graphics.fillEllipse(bee.x - 5, bee.y - 8, 10, 8);
       this.graphics.fillEllipse(bee.x + 5, bee.y - 8, 10, 8);
 
-      if (bee.carryingWax) {
+      if (bee.carryingNectar) {
         this.graphics.fillStyle(0xfcd34d, 1);
         this.graphics.fillCircle(bee.x + 12, bee.y + 2, 3);
+      }
+
+      if (bee.bornTimer > 0) {
+        this.graphics.lineStyle(2, 0xf97316, 0.7);
+        this.graphics.strokeCircle(bee.x, bee.y, 14 + bee.bornTimer * 6);
       }
     });
   }
