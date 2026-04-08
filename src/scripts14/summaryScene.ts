@@ -55,6 +55,7 @@ class SummaryScene extends BaseResponsiveScene {
   private residents: Resident[] = [];
   private cells: Cell[] = [];
   private elapsedSeconds = 0;
+  private currentTileSize = 42;
 
   /**
    * Codex: クォータービュー箱庭シーンを初期化する。
@@ -116,6 +117,9 @@ class SummaryScene extends BaseResponsiveScene {
       this.advanceResident(resident, deltaSeconds);
     });
 
+    // Codex: 毎フレーム位置更新して絵文字が停止しないようにする。
+    this.refreshResidentPlacement(this.currentTileSize);
+
     const watchingMood = this.residents[Math.floor((this.elapsedSeconds / 2) % this.residents.length)]?.mood ?? 'のんびり';
     this.statusText.setText(`住人数: ${this.residents.length}体  経過: ${this.elapsedSeconds}s  今日の雰囲気: ${watchingMood}`);
   }
@@ -145,6 +149,7 @@ class SummaryScene extends BaseResponsiveScene {
     this.subtitleText.setPosition(layout.width * 0.5, layout.subtitleY).setFontSize(Math.max(14, Math.floor(layout.width * 0.018)));
     this.statusText.setPosition(layout.width * 0.5, layout.statusY).setFontSize(Math.max(13, Math.floor(layout.width * 0.015)));
 
+    this.currentTileSize = layout.tileSize;
     this.worldLayer.setPosition(layout.worldCenterX, layout.worldCenterY);
     this.redrawVillage(layout.tileSize);
     this.refreshResidentPlacement(layout.tileSize);
