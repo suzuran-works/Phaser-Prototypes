@@ -19,7 +19,7 @@ type Cell = {
   y: number;
 };
 
-type MonkeyState = 'idle' | 'appealing';
+type MonkeyState = 'idle' | 'appealing' | 'angry';
 
 const WORLD_SIZE = 8;
 const TILE_TOP_COLOR = 0x22c55e;
@@ -29,7 +29,7 @@ const FENCE_COLOR = 0xf1f5f9;
 const CUSTOMER_EMOJIS = ['😀', '😄', '🙂', '🧢', '👩', '👨‍🦰', '🧒', '🧑‍🦱'];
 const MONKEY_EMOJIS = ['🐵', '🐒', '🙈'];
 const BANANA_EMOJI = '🍌';
-const MONKEY_SPOTS: Cell[] = [{ x: 3, y: 3 }, { x: 4, y: 3 }, { x: 4, y: 4 }];
+const MONKEY_SPOTS: Cell[] = [{ x: 2.9, y: 3.2 }, { x: 3.8, y: 2.9 }, { x: 4.7, y: 3.3 }, { x: 3.4, y: 4.2 }, { x: 4.3, y: 4.4 }];
 const CUSTOMER_SPOTS: Cell[] = [
   { x: 1, y: 1 },
   { x: 2, y: 1 },
@@ -54,9 +54,15 @@ class SummaryScene extends BaseResponsiveScene {
   private customerTexts: Phaser.GameObjects.Text[] = [];
   private monkeyShadows: Phaser.GameObjects.Ellipse[] = [];
   private monkeyStates: MonkeyState[] = [];
+  private monkeyAppealScores: number[] = [];
+  private monkeyHungerTimes: number[] = [];
+  private monkeyMoodTexts: Phaser.GameObjects.Text[] = [];
+  private monkeyBaseScales: number[] = [];
   private monkeyAppealTime = 0;
   private cells: Cell[] = [];
   private bananaFeedCount = 0;
+  private skippedFeedCount = 0;
+  private angryMonkeyCount = 0;
   private bananaTexts: Phaser.GameObjects.Text[] = [];
   private currentTileSize = 44;
 
@@ -121,10 +127,12 @@ class SummaryScene extends BaseResponsiveScene {
     this.monkeyAppealTime += deltaSeconds;
 
     this.updateMonkeyAppeal(deltaSeconds);
+    this.updateCustomerMotion();
     this.updateBananas(deltaSeconds);
 
     const appealingCount = this.monkeyStates.filter((state) => state === 'appealing').length;
-    this.statusText.setText(`猿のアピール: ${appealingCount}匹  投げられたバナナ: ${this.bananaFeedCount}本`);
+    this.angryMonkeyCount = this.monkeyStates.filter((state) => state === 'angry').length;
+    this.statusText.setText(`猿のアピール: ${appealingCount}匹  怒り: ${this.angryMonkeyCount}匹  バナナ: ${this.bananaFeedCount}本  見送り: ${this.skippedFeedCount}回`);
   }
 
   /**
@@ -196,8 +204,8 @@ class SummaryScene extends BaseResponsiveScene {
    * GPT-5.3-Codex: 猿コーナーの周囲に柵を描いて観覧エリアを明確化する。
    */
   private drawMonkeyAreaFence(tileSize: number): void {
-    const minGrid = 2.5;
-    const maxGrid = 4.7;
+    const minGrid = 2.0;
+    const maxGrid = 5.25;
     const corners = [
       this.toIsometric(minGrid, minGrid, tileSize),
       this.toIsometric(maxGrid, minGrid, tileSize),
@@ -206,17 +214,15 @@ class SummaryScene extends BaseResponsiveScene {
     ];
 
     corners.forEach((corner) => {
-      const pole = this.add.rectangle(corner.x, corner.y - tileSize * 0.5, 4, tileSize * 0.8, FENCE_COLOR, 0.85);
+      const pole = this.add.rectangle(corner.x, corner.y - tileSize * 0.48, 5, tileSize * 0.94, FENCE_COLOR, 0.88);
       this.groundLayer.add(pole);
     });
 
-    for (let i = 0; i < corners.length; i += 1) {
-      const from = corners[i];
-      const to = corners[(i + 1) % corners.length];
-      const rail = this.add.line(0, 0, from.x, from.y - tileSize * 0.74, to.x, to.y - tileSize * 0.74, FENCE_COLOR, 0.7)
-        .setLineWidth(2, 2);
-      this.groundLayer.add(rail);
-    }
+    // GPT-5.3-Codex: 奥側を先に、手前側を後に描くことで視覚的な破綻を回避する。
+    this.drawFenceSegment(corners[0], corners[1], tileSize, false);
+    this.drawFenceSegment(corners[3], corners[0], tileSize, false);
+    this.drawFenceSegment(corners[1], corners[2], tileSize, true);
+    this.drawFenceSegment(corners[2], corners[3], tileSize, true);
   }
 
   /**
@@ -227,6 +233,10 @@ class SummaryScene extends BaseResponsiveScene {
     this.customerTexts = [];
     this.monkeyShadows = [];
     this.monkeyStates = [];
+    this.monkeyAppealScores = [];
+    this.monkeyHungerTimes = [];
+    this.monkeyMoodTexts = [];
+    this.monkeyBaseScales = [];
 
     MONKEY_SPOTS.forEach(() => {
       const shadow = this.add.ellipse(0, 0, 22, 10, 0x020617, 0.35);
@@ -234,11 +244,19 @@ class SummaryScene extends BaseResponsiveScene {
         fontFamily: 'sans-serif',
         fontSize: '42px',
       }).setOrigin(0.5, 0.9);
+      const mood = this.add.text(0, 0, '', {
+        fontFamily: 'sans-serif',
+        fontSize: '22px',
+      }).setOrigin(0.5, 1);
 
       this.monkeyShadows.push(shadow);
       this.monkeyTexts.push(monkey);
       this.monkeyStates.push('idle');
-      this.actorLayer.add([shadow, monkey]);
+      this.monkeyAppealScores.push(0);
+      this.monkeyHungerTimes.push(0);
+      this.monkeyMoodTexts.push(mood);
+      this.monkeyBaseScales.push(1);
+      this.actorLayer.add([shadow, mood, monkey]);
     });
 
     CUSTOMER_SPOTS.forEach(() => {
@@ -262,6 +280,7 @@ class SummaryScene extends BaseResponsiveScene {
       const iso = this.toIsometric(spot.x, spot.y, tileSize);
       monkey.setPosition(iso.x, iso.y - tileSize * 0.35);
       monkey.setFontSize(Math.max(28, Math.floor(tileSize * 0.96)));
+      this.monkeyMoodTexts[index].setPosition(iso.x, iso.y - tileSize * 0.82).setFontSize(Math.max(16, Math.floor(tileSize * 0.42)));
       this.monkeyShadows[index].setPosition(iso.x, iso.y - tileSize * 0.05).setSize(tileSize * 0.54, tileSize * 0.22);
     });
 
@@ -280,7 +299,13 @@ class SummaryScene extends BaseResponsiveScene {
     this.monkeyTexts.forEach((monkey, index) => {
       const cycle = (this.monkeyAppealTime + index * 0.7) % 3.2;
       const isAppealing = cycle > 0.45 && cycle < 1.6;
-      this.monkeyStates[index] = isAppealing ? 'appealing' : 'idle';
+      this.monkeyAppealScores[index] = isAppealing
+        ? Math.min(1, this.monkeyAppealScores[index] + deltaSeconds * 0.85)
+        : Math.max(0, this.monkeyAppealScores[index] - deltaSeconds * 0.5);
+
+      this.monkeyHungerTimes[index] += deltaSeconds;
+      const isAngry = this.monkeyHungerTimes[index] > 6.8;
+      this.monkeyStates[index] = isAngry ? 'angry' : (isAppealing ? 'appealing' : 'idle');
 
       const spot = MONKEY_SPOTS[index];
       const base = this.toIsometric(spot.x, spot.y, this.currentTileSize);
@@ -288,10 +313,28 @@ class SummaryScene extends BaseResponsiveScene {
       const jumpOffset = jump * deltaSeconds * 24;
       monkey.setPosition(base.x, base.y - this.currentTileSize * 0.35 + jumpOffset);
       this.monkeyShadows[index].setPosition(base.x, base.y - this.currentTileSize * 0.05);
-      monkey.setScale(isAppealing ? 1.08 : 1);
+      const angryBoost = isAngry ? 0.1 : 0;
+      const appealBoost = isAppealing ? 0.08 : 0;
+      this.monkeyBaseScales[index] = 1 + angryBoost + appealBoost;
+      monkey.setScale(this.monkeyBaseScales[index]);
 
-      // GPT-5.3-Codex: アピール中の猿だけ目立つように色味を明るくする。
-      monkey.setTint(isAppealing ? 0xfff7d6 : 0xffffff);
+      // GPT-5.3-Codex: 怒り・アピール・通常の状態で視覚トーンを切り替える。
+      monkey.setTint(isAngry ? 0xffb4b4 : (isAppealing ? 0xfff7d6 : 0xffffff));
+      this.monkeyMoodTexts[index].setText(isAngry ? '💢' : (isAppealing ? '✨' : ''));
+    });
+  }
+
+  /**
+   * GPT-5.3-Codex: 観客に軽い揺れ動作を与えてシーン全体の静止感を減らす。
+   */
+  private updateCustomerMotion(): void {
+    this.customerTexts.forEach((customer, index) => {
+      const spot = CUSTOMER_SPOTS[index];
+      const base = this.toIsometric(spot.x, spot.y, this.currentTileSize);
+      const swayX = Math.sin(this.monkeyAppealTime * 1.7 + index * 0.8) * this.currentTileSize * 0.05;
+      const bobY = Math.sin(this.monkeyAppealTime * 2.3 + index * 0.5) * this.currentTileSize * 0.045;
+      customer.setPosition(base.x + swayX, base.y - this.currentTileSize * 0.32 + bobY);
+      customer.setScale(1 + Math.max(0, bobY) * 0.006);
     });
   }
 
@@ -304,7 +347,11 @@ class SummaryScene extends BaseResponsiveScene {
     }
 
     const customerIndex = Phaser.Math.Between(0, this.customerTexts.length - 1);
-    const monkeyIndex = Phaser.Math.Between(0, this.monkeyTexts.length - 1);
+    const monkeyIndex = this.chooseBananaTargetIndex();
+    if (monkeyIndex < 0) {
+      this.skippedFeedCount += 1;
+      return;
+    }
     const customer = this.customerTexts[customerIndex];
     const monkey = this.monkeyTexts[monkeyIndex];
 
@@ -323,6 +370,43 @@ class SummaryScene extends BaseResponsiveScene {
     this.bananaTexts.push(banana);
     this.actorLayer.add(banana);
     this.bananaFeedCount += 1;
+    this.monkeyHungerTimes[monkeyIndex] = Math.max(0, this.monkeyHungerTimes[monkeyIndex] - 4.8);
+    this.monkeyAppealScores[monkeyIndex] = Math.max(0, this.monkeyAppealScores[monkeyIndex] - 0.34);
+  }
+
+  /**
+   * GPT-5.3-Codex: アピールの強い猿を優先しつつ、客が見送るケースも含めた投擲先を決定する。
+   */
+  private chooseBananaTargetIndex(): number {
+    const appealingIndices = this.monkeyStates
+      .map((state, index) => ({ state, index }))
+      .filter((entry) => entry.state === 'appealing' || entry.state === 'angry')
+      .map((entry) => entry.index);
+
+    if (appealingIndices.length === 0) {
+      return -1;
+    }
+
+    // GPT-5.3-Codex: 客は常に投げるわけではないため、一定確率で見送りを発生させる。
+    if (Math.random() < 0.35) {
+      return -1;
+    }
+
+    const weights = appealingIndices.map((index) => this.monkeyAppealScores[index] + (this.monkeyStates[index] === 'angry' ? 0.45 : 0.15));
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+    if (totalWeight <= 0) {
+      return Phaser.Utils.Array.GetRandom(appealingIndices);
+    }
+
+    let pick = Math.random() * totalWeight;
+    for (let i = 0; i < appealingIndices.length; i += 1) {
+      pick -= weights[i];
+      if (pick <= 0) {
+        return appealingIndices[i];
+      }
+    }
+
+    return appealingIndices[appealingIndices.length - 1];
   }
 
   /**
@@ -357,6 +441,17 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private toIsometric(gridX: number, gridY: number, tileSize: number): Phaser.Math.Vector2 {
     return new Phaser.Math.Vector2((gridX - gridY) * tileSize, (gridX + gridY) * tileSize * 0.5);
+  }
+
+  /**
+   * GPT-5.3-Codex: 猿エリア拡張に合わせて破綻しない順序で柵セグメントを描画する。
+   */
+  private drawFenceSegment(from: Phaser.Math.Vector2, to: Phaser.Math.Vector2, tileSize: number, isFront: boolean): void {
+    const railTop = this.add.line(0, 0, from.x, from.y - tileSize * 0.8, to.x, to.y - tileSize * 0.8, FENCE_COLOR, isFront ? 0.9 : 0.72)
+      .setLineWidth(isFront ? 3 : 2, isFront ? 3 : 2);
+    const railBottom = this.add.line(0, 0, from.x, from.y - tileSize * 0.62, to.x, to.y - tileSize * 0.62, FENCE_COLOR, isFront ? 0.72 : 0.58)
+      .setLineWidth(2, 2);
+    this.groundLayer.add([railTop, railBottom]);
   }
 }
 
