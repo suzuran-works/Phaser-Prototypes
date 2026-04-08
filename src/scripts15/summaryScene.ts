@@ -21,14 +21,17 @@ type Cell = {
 
 type MonkeyState = 'idle' | 'appealing' | 'angry';
 
+type FlyingType = 'banana' | 'poop';
+
 const WORLD_SIZE = 8;
 const TILE_TOP_COLOR = 0x22c55e;
 const TILE_LEFT_COLOR = 0x15803d;
 const TILE_RIGHT_COLOR = 0x166534;
 const FENCE_COLOR = 0xf1f5f9;
-const CUSTOMER_EMOJIS = ['😀', '😄', '🙂', '🧢', '👩', '👨‍🦰', '🧒', '🧑‍🦱'];
+const CUSTOMER_EMOJIS = ['😀', '😄', '🙂', '👩', '👨‍🦰', '🧒', '🧑‍🦱', '👴'];
 const MONKEY_EMOJIS = ['🐵', '🐒', '🙈'];
 const BANANA_EMOJI = '🍌';
+const POOP_EMOJI = '💩';
 const MONKEY_SPOTS: Cell[] = [{ x: 2.9, y: 3.2 }, { x: 3.8, y: 2.9 }, { x: 4.7, y: 3.3 }, { x: 3.4, y: 4.2 }, { x: 4.3, y: 4.4 }];
 const CUSTOMER_SPOTS: Cell[] = [
   { x: 1, y: 1 },
@@ -57,13 +60,21 @@ class SummaryScene extends BaseResponsiveScene {
   private monkeyAppealScores: number[] = [];
   private monkeyHungerTimes: number[] = [];
   private monkeyMoodTexts: Phaser.GameObjects.Text[] = [];
+  private customerMoodTexts: Phaser.GameObjects.Text[] = [];
   private monkeyBaseScales: number[] = [];
+  private monkeyMoveSeeds: number[] = [];
+  private monkeyReactionTimers: number[] = [];
+  private monkeyReactionEmojis: string[] = [];
+  private customerReactionTimers: number[] = [];
+  private customerReactionEmojis: string[] = [];
   private monkeyAppealTime = 0;
+  private monkeyRevengeTime = 0;
   private cells: Cell[] = [];
   private bananaFeedCount = 0;
   private skippedFeedCount = 0;
   private angryMonkeyCount = 0;
-  private bananaTexts: Phaser.GameObjects.Text[] = [];
+  private poopThrowCount = 0;
+  private flyingItems: Phaser.GameObjects.Text[] = [];
   private currentTileSize = 44;
 
   /**
@@ -120,19 +131,21 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * GPT-5.3-Codex: 毎フレーム猿のアピール演出とバナナの飛翔を更新する。
+   * GPT-5.3-Codex: 毎フレーム猿のアピール・感情・投擲演出を更新する。
    */
   public update(_: number, deltaMs: number): void {
     const deltaSeconds = deltaMs / 1000;
     this.monkeyAppealTime += deltaSeconds;
+    this.monkeyRevengeTime += deltaSeconds;
 
     this.updateMonkeyAppeal(deltaSeconds);
-    this.updateCustomerMotion();
-    this.updateBananas(deltaSeconds);
+    this.updateCustomerMotion(deltaSeconds);
+    this.maybeThrowPoop();
+    this.updateFlyingItems(deltaSeconds);
 
     const appealingCount = this.monkeyStates.filter((state) => state === 'appealing').length;
     this.angryMonkeyCount = this.monkeyStates.filter((state) => state === 'angry').length;
-    this.statusText.setText(`猿のアピール: ${appealingCount}匹  怒り: ${this.angryMonkeyCount}匹  バナナ: ${this.bananaFeedCount}本  見送り: ${this.skippedFeedCount}回`);
+    this.statusText.setText(`猿のアピール: ${appealingCount}匹  怒り: ${this.angryMonkeyCount}匹  バナナ: ${this.bananaFeedCount}本  仕返し: ${this.poopThrowCount}発  見送り: ${this.skippedFeedCount}回`);
   }
 
   /**
@@ -161,7 +174,8 @@ class SummaryScene extends BaseResponsiveScene {
     this.statusText.setPosition(layout.width * 0.5, layout.statusY).setFontSize(Math.max(13, Math.floor(layout.width * 0.015)));
 
     this.currentTileSize = layout.tileSize;
-    this.worldLayer.setPosition(layout.worldCenterX, layout.worldCenterY);
+    const visualCenterX = this.computeWorldVisualCenterX(layout.tileSize);
+    this.worldLayer.setPosition(layout.worldCenterX - visualCenterX, layout.worldCenterY);
     this.redrawGround(layout.tileSize);
     this.repositionActors(layout.tileSize);
   }
@@ -214,7 +228,9 @@ class SummaryScene extends BaseResponsiveScene {
     ];
 
     corners.forEach((corner) => {
-      const pole = this.add.rectangle(corner.x, corner.y - tileSize * 0.48, 5, tileSize * 0.94, FENCE_COLOR, 0.88);
+      const poleHeight = tileSize * 0.94;
+      const poleTopY = corner.y - tileSize * 0.86;
+      const pole = this.add.rectangle(corner.x, poleTopY + poleHeight * 0.5, 5, poleHeight, FENCE_COLOR, 0.88);
       this.groundLayer.add(pole);
     });
 
@@ -236,15 +252,21 @@ class SummaryScene extends BaseResponsiveScene {
     this.monkeyAppealScores = [];
     this.monkeyHungerTimes = [];
     this.monkeyMoodTexts = [];
+    this.customerMoodTexts = [];
     this.monkeyBaseScales = [];
+    this.monkeyMoveSeeds = [];
+    this.monkeyReactionTimers = [];
+    this.monkeyReactionEmojis = [];
+    this.customerReactionTimers = [];
+    this.customerReactionEmojis = [];
 
-    MONKEY_SPOTS.forEach(() => {
+    MONKEY_SPOTS.forEach((_, index) => {
       const shadow = this.add.ellipse(0, 0, 22, 10, 0x020617, 0.35);
       const monkey = this.add.text(0, 0, Phaser.Utils.Array.GetRandom(MONKEY_EMOJIS), {
         fontFamily: 'sans-serif',
         fontSize: '42px',
       }).setOrigin(0.5, 0.9);
-      const mood = this.add.text(0, 0, '', {
+      const mood = this.add.text(0, 0, '😶', {
         fontFamily: 'sans-serif',
         fontSize: '22px',
       }).setOrigin(0.5, 1);
@@ -256,16 +278,27 @@ class SummaryScene extends BaseResponsiveScene {
       this.monkeyHungerTimes.push(0);
       this.monkeyMoodTexts.push(mood);
       this.monkeyBaseScales.push(1);
+      this.monkeyMoveSeeds.push(index * 1.33 + Math.random());
+      this.monkeyReactionTimers.push(0);
+      this.monkeyReactionEmojis.push('');
       this.actorLayer.add([shadow, mood, monkey]);
     });
 
-    CUSTOMER_SPOTS.forEach(() => {
+    CUSTOMER_SPOTS.forEach((_, index) => {
       const customer = this.add.text(0, 0, Phaser.Utils.Array.GetRandom(CUSTOMER_EMOJIS), {
         fontFamily: 'sans-serif',
         fontSize: '34px',
       }).setOrigin(0.5, 0.9);
+      const mood = this.add.text(0, 0, '🙂', {
+        fontFamily: 'sans-serif',
+        fontSize: '20px',
+      }).setOrigin(0.5, 1);
       this.customerTexts.push(customer);
-      this.actorLayer.add(customer);
+      this.customerMoodTexts.push(mood);
+      this.customerReactionTimers.push(0);
+      this.customerReactionEmojis.push('🙂');
+      this.actorLayer.add([mood, customer]);
+      this.setCustomerReaction(index, '🙂', 0.5);
     });
 
     this.repositionActors(this.currentTileSize);
@@ -289,6 +322,7 @@ class SummaryScene extends BaseResponsiveScene {
       const iso = this.toIsometric(spot.x, spot.y, tileSize);
       customer.setPosition(iso.x, iso.y - tileSize * 0.32);
       customer.setFontSize(Math.max(24, Math.floor(tileSize * 0.82)));
+      this.customerMoodTexts[index].setPosition(iso.x, iso.y - tileSize * 0.78).setFontSize(Math.max(14, Math.floor(tileSize * 0.38)));
     });
   }
 
@@ -309,25 +343,30 @@ class SummaryScene extends BaseResponsiveScene {
 
       const spot = MONKEY_SPOTS[index];
       const base = this.toIsometric(spot.x, spot.y, this.currentTileSize);
+      const driftX = Math.sin(this.monkeyAppealTime * 1.2 + this.monkeyMoveSeeds[index]) * this.currentTileSize * 0.12;
+      const driftY = Math.cos(this.monkeyAppealTime * 0.9 + this.monkeyMoveSeeds[index] * 1.4) * this.currentTileSize * 0.06;
       const jump = isAppealing ? Math.sin(this.monkeyAppealTime * 8 + index) * 6 : Math.sin(this.monkeyAppealTime * 3 + index) * 2;
       const jumpOffset = jump * deltaSeconds * 24;
-      monkey.setPosition(base.x, base.y - this.currentTileSize * 0.35 + jumpOffset);
-      this.monkeyShadows[index].setPosition(base.x, base.y - this.currentTileSize * 0.05);
+      monkey.setPosition(base.x + driftX, base.y - this.currentTileSize * 0.35 + driftY + jumpOffset);
+      this.monkeyShadows[index].setPosition(base.x + driftX, base.y - this.currentTileSize * 0.05 + driftY * 0.45);
       const angryBoost = isAngry ? 0.1 : 0;
       const appealBoost = isAppealing ? 0.08 : 0;
       this.monkeyBaseScales[index] = 1 + angryBoost + appealBoost;
       monkey.setScale(this.monkeyBaseScales[index]);
 
-      // GPT-5.3-Codex: 怒り・アピール・通常の状態で視覚トーンを切り替える。
+      // GPT-5.3-Codex: 怒り・アピール・通常とリアクションを統合して猿の感情を描画する。
       monkey.setTint(isAngry ? 0xffb4b4 : (isAppealing ? 0xfff7d6 : 0xffffff));
-      this.monkeyMoodTexts[index].setText(isAngry ? '💢' : (isAppealing ? '✨' : ''));
+      this.monkeyReactionTimers[index] = Math.max(0, this.monkeyReactionTimers[index] - deltaSeconds);
+      const autoMood = isAngry ? '💢' : (isAppealing ? '✨' : '😶');
+      const mood = this.monkeyReactionTimers[index] > 0 ? this.monkeyReactionEmojis[index] : autoMood;
+      this.monkeyMoodTexts[index].setText(mood).setPosition(base.x + driftX, base.y - this.currentTileSize * 0.84 + driftY * 0.7);
     });
   }
 
   /**
-   * GPT-5.3-Codex: 観客に軽い揺れ動作を与えてシーン全体の静止感を減らす。
+   * GPT-5.3-Codex: 観客に軽い揺れと感情表示を与えてシーン全体の静止感を減らす。
    */
-  private updateCustomerMotion(): void {
+  private updateCustomerMotion(deltaSeconds: number): void {
     this.customerTexts.forEach((customer, index) => {
       const spot = CUSTOMER_SPOTS[index];
       const base = this.toIsometric(spot.x, spot.y, this.currentTileSize);
@@ -335,6 +374,10 @@ class SummaryScene extends BaseResponsiveScene {
       const bobY = Math.sin(this.monkeyAppealTime * 2.3 + index * 0.5) * this.currentTileSize * 0.045;
       customer.setPosition(base.x + swayX, base.y - this.currentTileSize * 0.32 + bobY);
       customer.setScale(1 + Math.max(0, bobY) * 0.006);
+
+      this.customerReactionTimers[index] = Math.max(0, this.customerReactionTimers[index] - deltaSeconds);
+      const mood = this.customerReactionTimers[index] > 0 ? this.customerReactionEmojis[index] : '🙂';
+      this.customerMoodTexts[index].setPosition(base.x + swayX, base.y - this.currentTileSize * 0.78 + bobY * 0.8).setText(mood);
     });
   }
 
@@ -350,28 +393,71 @@ class SummaryScene extends BaseResponsiveScene {
     const monkeyIndex = this.chooseBananaTargetIndex();
     if (monkeyIndex < 0) {
       this.skippedFeedCount += 1;
+      this.setCustomerReaction(customerIndex, '🤔', 1.2);
       return;
     }
+
     const customer = this.customerTexts[customerIndex];
     const monkey = this.monkeyTexts[monkeyIndex];
+    const banana = this.createFlyingItem(BANANA_EMOJI, customer.x, customer.y - 12, monkey.x, monkey.y - 26, 'banana');
+    banana.setData('targetMonkeyIndex', monkeyIndex);
+    banana.setData('targetCustomerIndex', customerIndex);
+    this.actorLayer.add(banana);
 
-    const banana = this.add.text(customer.x, customer.y - 12, BANANA_EMOJI, {
+    this.bananaFeedCount += 1;
+    this.monkeyHungerTimes[monkeyIndex] = Math.max(0, this.monkeyHungerTimes[monkeyIndex] - 4.8);
+    this.monkeyAppealScores[monkeyIndex] = Math.max(0, this.monkeyAppealScores[monkeyIndex] - 0.34);
+    this.setCustomerReaction(customerIndex, '😊', 1.4);
+  }
+
+  /**
+   * GPT-5.3-Codex: 怒った猿が観客へ💩を投げる仕返しイベントを発生させる。
+   */
+  private maybeThrowPoop(): void {
+    if (this.monkeyRevengeTime < 2.2 || this.customerTexts.length === 0) {
+      return;
+    }
+
+    const angryIndices = this.monkeyStates
+      .map((state, index) => ({ state, index }))
+      .filter((entry) => entry.state === 'angry')
+      .map((entry) => entry.index);
+    if (angryIndices.length === 0) {
+      return;
+    }
+
+    this.monkeyRevengeTime = 0;
+    const monkeyIndex = Phaser.Utils.Array.GetRandom(angryIndices);
+    const customerIndex = Phaser.Math.Between(0, this.customerTexts.length - 1);
+    const monkey = this.monkeyTexts[monkeyIndex];
+    const customer = this.customerTexts[customerIndex];
+    const poop = this.createFlyingItem(POOP_EMOJI, monkey.x, monkey.y - 24, customer.x, customer.y - 24, 'poop');
+    poop.setData('targetMonkeyIndex', monkeyIndex);
+    poop.setData('targetCustomerIndex', customerIndex);
+    this.actorLayer.add(poop);
+    this.poopThrowCount += 1;
+    this.setMonkeyReaction(monkeyIndex, '😤', 1.2);
+  }
+
+  /**
+   * GPT-5.3-Codex: 絵文字投擲オブジェクトを生成し、更新対象へ登録する。
+   */
+  private createFlyingItem(emoji: string, fromX: number, fromY: number, toX: number, toY: number, type: FlyingType): Phaser.GameObjects.Text {
+    const item = this.add.text(fromX, fromY, emoji, {
       fontFamily: 'sans-serif',
       fontSize: `${Math.max(18, Math.floor(this.currentTileSize * 0.5))}px`,
     }).setOrigin(0.5, 0.8);
 
-    banana.setData('fromX', customer.x);
-    banana.setData('fromY', customer.y - 12);
-    banana.setData('toX', monkey.x);
-    banana.setData('toY', monkey.y - 26);
-    banana.setData('progress', 0);
-    banana.setData('duration', Phaser.Math.FloatBetween(0.6, 0.95));
+    item.setData('fromX', fromX);
+    item.setData('fromY', fromY);
+    item.setData('toX', toX);
+    item.setData('toY', toY);
+    item.setData('progress', 0);
+    item.setData('duration', type === 'banana' ? Phaser.Math.FloatBetween(0.6, 0.95) : Phaser.Math.FloatBetween(0.45, 0.75));
+    item.setData('type', type);
 
-    this.bananaTexts.push(banana);
-    this.actorLayer.add(banana);
-    this.bananaFeedCount += 1;
-    this.monkeyHungerTimes[monkeyIndex] = Math.max(0, this.monkeyHungerTimes[monkeyIndex] - 4.8);
-    this.monkeyAppealScores[monkeyIndex] = Math.max(0, this.monkeyAppealScores[monkeyIndex] - 0.34);
+    this.flyingItems.push(item);
+    return item;
   }
 
   /**
@@ -410,30 +496,93 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * GPT-5.3-Codex: 飛翔中バナナの軌道補間と着弾時の後処理を行う。
+   * GPT-5.3-Codex: 飛翔アイテムの軌道補間と着弾時のリアクション処理を行う。
    */
-  private updateBananas(deltaSeconds: number): void {
-    this.bananaTexts = this.bananaTexts.filter((banana) => {
-      const progress = Number(banana.getData('progress')) + deltaSeconds / Number(banana.getData('duration'));
-      banana.setData('progress', progress);
+  private updateFlyingItems(deltaSeconds: number): void {
+    this.flyingItems = this.flyingItems.filter((item) => {
+      const progress = Number(item.getData('progress')) + deltaSeconds / Number(item.getData('duration'));
+      item.setData('progress', progress);
 
-      const fromX = Number(banana.getData('fromX'));
-      const fromY = Number(banana.getData('fromY'));
-      const toX = Number(banana.getData('toX'));
-      const toY = Number(banana.getData('toY'));
-      const arcHeight = this.currentTileSize * 0.85;
+      const fromX = Number(item.getData('fromX'));
+      const fromY = Number(item.getData('fromY'));
+      const toX = Number(item.getData('toX'));
+      const toY = Number(item.getData('toY'));
+      const type = String(item.getData('type')) as FlyingType;
+      const arcHeight = this.currentTileSize * (type === 'banana' ? 0.85 : 0.55);
 
       const x = Phaser.Math.Linear(fromX, toX, progress);
       const y = Phaser.Math.Linear(fromY, toY, progress) - Math.sin(progress * Math.PI) * arcHeight;
-      banana.setPosition(x, y);
+      item.setPosition(x, y);
 
       if (progress >= 1) {
-        banana.destroy();
+        const monkeyIndex = Number(item.getData('targetMonkeyIndex'));
+        const customerIndex = Number(item.getData('targetCustomerIndex'));
+        this.handleItemImpact(type, monkeyIndex, customerIndex);
+        item.destroy();
         return false;
       }
 
       return true;
     });
+  }
+
+  /**
+   * GPT-5.3-Codex: 着弾したアイテム種別に応じて猿・観客の感情を更新する。
+   */
+  private handleItemImpact(type: FlyingType, monkeyIndex: number, customerIndex: number): void {
+    if (type === 'banana') {
+      this.setMonkeyReaction(monkeyIndex, '😋', 1.8);
+      this.setCustomerReaction(customerIndex, '👏', 1.3);
+      return;
+    }
+
+    this.setMonkeyReaction(monkeyIndex, '😈', 1.6);
+    const reaction = Math.random() < 0.5 ? '🤢' : '😱';
+    this.setCustomerReaction(customerIndex, reaction, 2.2);
+  }
+
+  /**
+   * GPT-5.3-Codex: 猿の一時リアクションを設定する。
+   */
+  private setMonkeyReaction(index: number, emoji: string, duration: number): void {
+    if (index < 0 || index >= this.monkeyReactionTimers.length) {
+      return;
+    }
+
+    this.monkeyReactionEmojis[index] = emoji;
+    this.monkeyReactionTimers[index] = duration;
+  }
+
+  /**
+   * GPT-5.3-Codex: 観客の一時リアクションを設定する。
+   */
+  private setCustomerReaction(index: number, emoji: string, duration: number): void {
+    if (index < 0 || index >= this.customerReactionTimers.length) {
+      return;
+    }
+
+    this.customerReactionEmojis[index] = emoji;
+    this.customerReactionTimers[index] = duration;
+  }
+
+  /**
+   * GPT-5.3-Codex: ワールド全体が画面中央へ来るよう可視範囲の中心Xを算出する。
+   */
+  private computeWorldVisualCenterX(tileSize: number): number {
+    const points: Phaser.Math.Vector2[] = [];
+    this.cells.forEach((cell) => {
+      points.push(this.toIsometric(cell.x, cell.y, tileSize));
+    });
+    MONKEY_SPOTS.forEach((spot) => {
+      points.push(this.toIsometric(spot.x, spot.y, tileSize));
+    });
+    CUSTOMER_SPOTS.forEach((spot) => {
+      points.push(this.toIsometric(spot.x, spot.y, tileSize));
+    });
+
+    const minX = Math.min(...points.map((point) => point.x));
+    const maxX = Math.max(...points.map((point) => point.x));
+    return (minX + maxX) * 0.5;
   }
 
   /**
@@ -447,9 +596,11 @@ class SummaryScene extends BaseResponsiveScene {
    * GPT-5.3-Codex: 猿エリア拡張に合わせて破綻しない順序で柵セグメントを描画する。
    */
   private drawFenceSegment(from: Phaser.Math.Vector2, to: Phaser.Math.Vector2, tileSize: number, isFront: boolean): void {
-    const railTop = this.add.line(0, 0, from.x, from.y - tileSize * 0.8, to.x, to.y - tileSize * 0.8, FENCE_COLOR, isFront ? 0.9 : 0.72)
+    const railTopY = tileSize * 0.86;
+    const railBottomY = tileSize * 0.68;
+    const railTop = this.add.line(0, 0, from.x, from.y - railTopY, to.x, to.y - railTopY, FENCE_COLOR, isFront ? 0.9 : 0.72)
       .setLineWidth(isFront ? 3 : 2, isFront ? 3 : 2);
-    const railBottom = this.add.line(0, 0, from.x, from.y - tileSize * 0.62, to.x, to.y - tileSize * 0.62, FENCE_COLOR, isFront ? 0.72 : 0.58)
+    const railBottom = this.add.line(0, 0, from.x, from.y - railBottomY, to.x, to.y - railBottomY, FENCE_COLOR, isFront ? 0.72 : 0.58)
       .setLineWidth(2, 2);
     this.groundLayer.add([railTop, railBottom]);
   }
