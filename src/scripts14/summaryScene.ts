@@ -14,6 +14,8 @@ type VillageLayout = {
   tileSize: number;
 };
 
+type ResidentActivity = 'commuting' | 'farming' | 'chatting' | 'napping' | 'shopping' | 'stargazing';
+
 type Resident = {
   emoji: string;
   color: number;
@@ -25,7 +27,13 @@ type Resident = {
   speed: number;
   text: Phaser.GameObjects.Text;
   shadow: Phaser.GameObjects.Ellipse;
+  badge: Phaser.GameObjects.Text;
   mood: string;
+  activity: ResidentActivity;
+  activityTimer: number;
+  homeX: number;
+  homeY: number;
+  pulseOffset: number;
 };
 
 type Cell = {
@@ -42,6 +50,13 @@ const TILE_LEFT_COLOR = 0x3f6212;
 const TILE_RIGHT_COLOR = 0x65a30d;
 const BUILDING_COLOR = 0x334155;
 const BUILDING_EDGE_COLOR = 0x94a3b8;
+const VILLAGE_SPOTS: Cell[] = [
+  { x: 1, y: 2 },
+  { x: 5, y: 2 },
+  { x: 3, y: 5 },
+  { x: 2, y: 4 },
+  { x: 4, y: 3 },
+];
 
 class SummaryScene extends BaseResponsiveScene {
   public static readonly key = 'Scripts14SummaryScene';
@@ -55,6 +70,7 @@ class SummaryScene extends BaseResponsiveScene {
   private residents: Resident[] = [];
   private cells: Cell[] = [];
   private elapsedSeconds = 0;
+  private elapsedTime = 0;
   private currentTileSize = 42;
 
   /**
@@ -113,6 +129,8 @@ class SummaryScene extends BaseResponsiveScene {
    */
   public update(_: number, deltaMs: number): void {
     const deltaSeconds = deltaMs / 1000;
+    this.elapsedTime += deltaSeconds;
+
     this.residents.forEach((resident) => {
       this.advanceResident(resident, deltaSeconds);
     });
@@ -120,8 +138,10 @@ class SummaryScene extends BaseResponsiveScene {
     // Codex: 毎フレーム位置更新して絵文字が停止しないようにする。
     this.refreshResidentPlacement(this.currentTileSize);
 
-    const watchingMood = this.residents[Math.floor((this.elapsedSeconds / 2) % this.residents.length)]?.mood ?? 'のんびり';
-    this.statusText.setText(`住人数: ${this.residents.length}体  経過: ${this.elapsedSeconds}s  今日の雰囲気: ${watchingMood}`);
+    const watchingResident = this.residents[Math.floor((this.elapsedSeconds / 2) % this.residents.length)];
+    const watchingMood = watchingResident?.mood ?? 'のんびり';
+    const activityName = watchingResident ? this.getActivityLabel(watchingResident.activity) : '散策';
+    this.statusText.setText(`住人数: ${this.residents.length}体  経過: ${this.elapsedSeconds}s  観察メモ: ${watchingMood} / ${activityName}`);
   }
 
   /**
@@ -142,7 +162,7 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: レイアウトに合わせてUIと住人描画位置を再配置する。
+   * Codex: レイアウトに合わせてUIと箱庭の配置を再計算する。
    */
   protected renderLayout(layout: VillageLayout): void {
     this.titleText.setPosition(layout.width * 0.5, layout.titleY).setFontSize(Math.max(28, Math.floor(layout.width * 0.036)));
@@ -240,8 +260,13 @@ class SummaryScene extends BaseResponsiveScene {
         fontFamily: 'sans-serif',
         fontSize: '34px',
       }).setOrigin(0.5);
+      const badge = this.add.text(0, 0, '…', {
+        fontFamily: 'sans-serif',
+        fontSize: '16px',
+        color: '#e2e8f0',
+      }).setOrigin(0.5);
 
-      this.residentLayer.add([shadow, text]);
+      this.residentLayer.add([shadow, text, badge]);
 
       this.residents.push({
         emoji: text.text,
@@ -251,27 +276,46 @@ class SummaryScene extends BaseResponsiveScene {
         targetGridX: targetX,
         targetGridY: targetY,
         progress: Phaser.Math.FloatBetween(0, 1),
-        speed: Phaser.Math.FloatBetween(0.16, 0.36),
+        speed: Phaser.Math.FloatBetween(0.12, 0.34),
         text,
         shadow,
+        badge,
         mood: Phaser.Utils.Array.GetRandom(MOOD_SET),
+        activity: this.pickActivity(),
+        activityTimer: Phaser.Math.FloatBetween(2.5, 6.5),
+        homeX: startX,
+        homeY: startY,
+        pulseOffset: Phaser.Math.FloatBetween(0, Math.PI * 2),
       });
     }
   }
 
   /**
-   * Codex: 住人の移動進行を更新し、目標到達時に次の行き先を決める。
+   * Codex: 住人の移動進行と生活ルーティンを更新する。
    */
   private advanceResident(resident: Resident, deltaSeconds: number): void {
+    resident.activityTimer -= deltaSeconds;
+
+    if (resident.activity === 'napping') {
+      resident.progress = 0;
+      if (resident.activityTimer <= 0) {
+        this.planNextRoutine(resident);
+      }
+      return;
+    }
+
     resident.progress += resident.speed * deltaSeconds;
 
     if (resident.progress >= 1) {
       resident.gridX = resident.targetGridX;
       resident.gridY = resident.targetGridY;
-      resident.targetGridX = Phaser.Math.Between(0, WORLD_SIZE - 1);
-      resident.targetGridY = Phaser.Math.Between(0, WORLD_SIZE - 1);
       resident.progress = 0;
-      resident.mood = Phaser.Utils.Array.GetRandom(MOOD_SET);
+
+      if (resident.activityTimer <= 0 || Phaser.Math.Between(0, 100) < 22) {
+        this.planNextRoutine(resident);
+      } else {
+        this.pickLocalDestination(resident);
+      }
     }
   }
 
@@ -284,19 +328,131 @@ class SummaryScene extends BaseResponsiveScene {
       const to = this.toIsometric(resident.targetGridX, resident.targetGridY, tileSize);
       const x = Phaser.Math.Linear(from.x, to.x, resident.progress);
       const y = Phaser.Math.Linear(from.y, to.y, resident.progress);
-      const bob = Math.sin((this.elapsedSeconds + resident.progress) * 3.2) * Math.max(3, tileSize * 0.07);
+      const pulse = Math.sin(this.elapsedTime * 3.6 + resident.pulseOffset);
+      const bob = pulse * Math.max(2, tileSize * 0.06);
+      const isNapping = resident.activity === 'napping';
 
-      resident.shadow.setPosition(x, y + tileSize * 0.36).setSize(tileSize * 0.54, tileSize * 0.24);
+      resident.shadow
+        .setPosition(x, y + tileSize * 0.36)
+        .setSize(tileSize * 0.54 + pulse * 1.4, tileSize * 0.24);
       resident.text
-        .setPosition(x, y - tileSize * 0.15 - bob)
+        .setPosition(x, y - tileSize * 0.15 - (isNapping ? 1 : bob))
         .setFontSize(Math.max(18, Math.floor(tileSize * 0.72)))
-        .setTint(resident.color);
+        .setTint(resident.color)
+        .setScale(isNapping ? 0.92 : 1 + pulse * 0.035);
+      resident.badge
+        .setText(this.getActivityBadge(resident.activity))
+        .setPosition(x, y - tileSize * 0.72 - (isNapping ? 0 : bob))
+        .setFontSize(Math.max(12, Math.floor(tileSize * 0.28)))
+        .setAlpha(isNapping ? 0.92 : 0.78 + Math.max(0, pulse) * 0.2);
     });
 
     this.residents.sort((left, right) => left.text.y - right.text.y).forEach((resident, index) => {
-      resident.shadow.setDepth(index * 2 + 1);
-      resident.text.setDepth(index * 2 + 2);
+      resident.shadow.setDepth(index * 3 + 1);
+      resident.text.setDepth(index * 3 + 2);
+      resident.badge.setDepth(index * 3 + 3);
     });
+  }
+
+  /**
+   * Codex: 次の生活アクティビティを選んで行き先を設定する。
+   */
+  private planNextRoutine(resident: Resident): void {
+    resident.activity = this.pickActivity();
+    resident.activityTimer = Phaser.Math.FloatBetween(2.5, 7.2);
+    resident.mood = Phaser.Utils.Array.GetRandom(MOOD_SET);
+
+    if (resident.activity === 'napping') {
+      resident.targetGridX = resident.homeX;
+      resident.targetGridY = resident.homeY;
+      resident.speed = Phaser.Math.FloatBetween(0.1, 0.18);
+      return;
+    }
+
+    if (resident.activity === 'farming' || resident.activity === 'shopping') {
+      const spot = Phaser.Utils.Array.GetRandom(VILLAGE_SPOTS);
+      resident.targetGridX = spot.x;
+      resident.targetGridY = spot.y;
+      resident.speed = Phaser.Math.FloatBetween(0.16, 0.3);
+      return;
+    }
+
+    if (resident.activity === 'chatting') {
+      const friend = Phaser.Utils.Array.GetRandom(this.residents);
+      resident.targetGridX = friend.gridX;
+      resident.targetGridY = friend.gridY;
+      resident.speed = Phaser.Math.FloatBetween(0.2, 0.34);
+      return;
+    }
+
+    this.pickLocalDestination(resident);
+    resident.speed = Phaser.Math.FloatBetween(0.18, 0.36);
+  }
+
+  /**
+   * Codex: 現在地周辺のタイルへ自然に歩く行き先を設定する。
+   */
+  private pickLocalDestination(resident: Resident): void {
+    resident.targetGridX = Phaser.Math.Clamp(resident.gridX + Phaser.Math.Between(-2, 2), 0, WORLD_SIZE - 1);
+    resident.targetGridY = Phaser.Math.Clamp(resident.gridY + Phaser.Math.Between(-2, 2), 0, WORLD_SIZE - 1);
+  }
+
+  /**
+   * Codex: 住人が行う生活アクティビティをランダムに選ぶ。
+   */
+  private pickActivity(): ResidentActivity {
+    const weightedActivities: ResidentActivity[] = [
+      'commuting',
+      'commuting',
+      'farming',
+      'chatting',
+      'shopping',
+      'stargazing',
+      'napping',
+    ];
+    return Phaser.Utils.Array.GetRandom(weightedActivities);
+  }
+
+  /**
+   * Codex: アクティビティの表示用ラベルを返す。
+   */
+  private getActivityLabel(activity: ResidentActivity): string {
+    switch (activity) {
+      case 'commuting':
+        return '通勤散歩';
+      case 'farming':
+        return '畑仕事';
+      case 'chatting':
+        return '井戸端会議';
+      case 'napping':
+        return 'ひなた寝';
+      case 'shopping':
+        return '買い出し';
+      case 'stargazing':
+      default:
+        return '星空観察';
+    }
+  }
+
+  /**
+   * Codex: アクティビティの吹き出し用絵文字を返す。
+   */
+  private getActivityBadge(activity: ResidentActivity): string {
+    switch (activity) {
+      case 'commuting':
+        return '🚶';
+      case 'farming':
+        return '🧺';
+      case 'chatting':
+        return '💬';
+      case 'napping':
+        return '💤';
+      case 'shopping':
+        return '🛍️';
+      case 'stargazing':
+      default:
+        return '✨';
+    }
   }
 
   /**
