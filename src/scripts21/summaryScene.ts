@@ -99,6 +99,7 @@ class SummaryScene extends BaseResponsiveScene {
   private reelActiveStates: boolean[] = [false, false, false];
   private spinResults: EmojiDefinition[] = [];
   private spinning = false;
+  private spinAttemptCount = 0;
   private tileSize = 38;
 
   /**
@@ -295,11 +296,12 @@ class SummaryScene extends BaseResponsiveScene {
       return;
     }
 
+    this.spinAttemptCount += 1;
     this.spinning = true;
     this.spinButton.disableInteractive().setAlpha(0.6);
     this.statusText.setText('スロット回転中...');
 
-    this.spinResults = Array.from({ length: REEL_COUNT }, () => Phaser.Utils.Array.GetRandom(EMOJI_POOL));
+    this.spinResults = this.generateSpinResults();
     this.reelActiveStates = [true, true, true];
 
     this.reelTimer?.remove(false);
@@ -334,6 +336,19 @@ class SummaryScene extends BaseResponsiveScene {
         }
       },
     });
+  }
+
+  /**
+   * GPT-5.3-Codex: 3回に1回は必ず揃うスロット結果を生成する。
+   */
+  private generateSpinResults(): EmojiDefinition[] {
+    if (this.spinAttemptCount % 3 === 0) {
+      const matchedEmoji = Phaser.Utils.Array.GetRandom(EMOJI_POOL);
+      // GPT-5.3-Codex: 3回目は全リール同一にして確定で揃える。
+      return Array.from({ length: REEL_COUNT }, () => matchedEmoji);
+    }
+
+    return Array.from({ length: REEL_COUNT }, () => Phaser.Utils.Array.GetRandom(EMOJI_POOL));
   }
 
   /**
