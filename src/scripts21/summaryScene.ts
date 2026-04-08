@@ -46,6 +46,12 @@ type ToolEntity = {
   gridY: number;
 };
 
+type TreeEntity = {
+  sprite: Phaser.GameObjects.Text;
+  gridX: number;
+  gridY: number;
+};
+
 type FoodEntity = {
   emoji: string;
   sprite: Phaser.GameObjects.Text;
@@ -64,6 +70,7 @@ const REEL_COUNT = 3;
 const REEL_TICK_MS = 80;
 const REEL_STOP_INTERVAL_MS = 420;
 const IDLE_MOODS = ['のんびり', 'うきうき', 'きょろきょろ', 'てくてく'];
+const INTERACTION_PROBABILITY = 0.62;
 const EMOJI_POOL: EmojiDefinition[] = [
   { emoji: '🐰', category: 'creature', label: 'うさぎ' },
   { emoji: '🦊', category: 'creature', label: 'きつね' },
@@ -94,6 +101,7 @@ class SummaryScene extends BaseResponsiveScene {
   private creatures: Creature[] = [];
   private tools: ToolEntity[] = [];
   private foods: FoodEntity[] = [];
+  private trees: TreeEntity[] = [];
   private reelTimer: Phaser.Time.TimerEvent | null = null;
   private stopTimer: Phaser.Time.TimerEvent | null = null;
   private reelActiveStates: boolean[] = [false, false, false];
@@ -395,7 +403,7 @@ class SummaryScene extends BaseResponsiveScene {
     const iso = this.toIso(gridX, gridY, this.tileSize);
 
     const shadow = this.add.ellipse(iso.x, iso.y + this.tileSize * 0.68, this.tileSize * 0.7, this.tileSize * 0.3, 0x020617, 0.3);
-    const sprite = this.add.text(iso.x, iso.y + this.tileSize * 0.18, emoji, {
+    const sprite = this.add.text(iso.x, iso.y - this.tileSize * 2.2, emoji, {
       fontFamily: 'sans-serif',
       fontSize: `${Math.max(28, Math.floor(this.tileSize * 0.95))}px`,
     }).setOrigin(0.5, 0.68);
@@ -408,6 +416,7 @@ class SummaryScene extends BaseResponsiveScene {
     }).setOrigin(0.5, 0.5);
 
     this.creatureLayer.add([shadow, sprite, info]);
+    this.playFallInTween(sprite, iso.y + this.tileSize * 0.18);
     this.creatures.push({
       emoji,
       mood: '誕生',
@@ -431,12 +440,17 @@ class SummaryScene extends BaseResponsiveScene {
     const gridX = Phaser.Math.Between(1, GRID_SIZE - 2);
     const gridY = Phaser.Math.Between(1, GRID_SIZE - 2);
     const iso = this.toIso(gridX, gridY, this.tileSize);
-    const sprite = this.add.text(iso.x, iso.y + this.tileSize * 0.18, emoji, {
+    const sprite = this.add.text(iso.x, iso.y - this.tileSize * 2.2, emoji, {
       fontFamily: 'sans-serif',
       fontSize: `${Math.max(20, Math.floor(this.tileSize * 0.8))}px`,
     }).setOrigin(0.5, 0.68);
     this.itemLayer.add(sprite);
     this.tools.push({ emoji, sprite, gridX, gridY });
+    this.playFallInTween(sprite, iso.y + this.tileSize * 0.18);
+
+    if (emoji === '🪓') {
+      this.spawnTreeNear(gridX, gridY);
+    }
 
     if (this.creatures.length === 0) {
       this.statusText.setText(`道具 ${emoji} が置かれた。生き物が来ると使います。`);
@@ -450,12 +464,13 @@ class SummaryScene extends BaseResponsiveScene {
     const gridX = Phaser.Math.Between(1, GRID_SIZE - 2);
     const gridY = Phaser.Math.Between(1, GRID_SIZE - 2);
     const iso = this.toIso(gridX, gridY, this.tileSize);
-    const sprite = this.add.text(iso.x, iso.y + this.tileSize * 0.18, emoji, {
+    const sprite = this.add.text(iso.x, iso.y - this.tileSize * 2.2, emoji, {
       fontFamily: 'sans-serif',
       fontSize: `${Math.max(20, Math.floor(this.tileSize * 0.8))}px`,
     }).setOrigin(0.5, 0.68);
     this.itemLayer.add(sprite);
     this.foods.push({ emoji, sprite, gridX, gridY, freshness: 7 });
+    this.playFallInTween(sprite, iso.y + this.tileSize * 0.18);
 
     if (this.creatures.length === 0) {
       this.statusText.setText(`食べもの ${emoji} が置かれた。生き物が来ると食べます。`);
@@ -476,6 +491,11 @@ class SummaryScene extends BaseResponsiveScene {
       food.sprite.setPosition(iso.x, iso.y + this.tileSize * 0.18).setFontSize(`${Math.max(20, Math.floor(this.tileSize * 0.8))}px`);
     });
 
+    this.trees.forEach((tree) => {
+      const iso = this.toIso(tree.gridX, tree.gridY, this.tileSize);
+      tree.sprite.setPosition(iso.x, iso.y + this.tileSize * 0.18).setFontSize(`${Math.max(20, Math.floor(this.tileSize * 0.86))}px`);
+    });
+
     this.creatures.forEach((creature) => {
       creature.sprite.setFontSize(`${Math.max(28, Math.floor(this.tileSize * 0.95))}px`);
       creature.info.setFontSize(`${Math.max(12, Math.floor(this.tileSize * 0.38))}px`);
@@ -493,6 +513,9 @@ class SummaryScene extends BaseResponsiveScene {
     for (let i = this.tools.length - 1; i >= 0; i -= 1) {
       const tool = this.tools[i];
       const receiver = this.creatures.find((creature) => {
+        if (Math.random() > INTERACTION_PROBABILITY) {
+          return false;
+        }
         const dx = creature.gridX - tool.gridX;
         const dy = creature.gridY - tool.gridY;
         return Math.hypot(dx, dy) < 1.2;
@@ -519,6 +542,9 @@ class SummaryScene extends BaseResponsiveScene {
       food.freshness -= deltaSec;
 
       const eater = this.creatures.find((creature) => {
+        if (Math.random() > INTERACTION_PROBABILITY) {
+          return false;
+        }
         const dx = creature.gridX - food.gridX;
         const dy = creature.gridY - food.gridY;
         return Math.hypot(dx, dy) < 1.2;
@@ -536,6 +562,66 @@ class SummaryScene extends BaseResponsiveScene {
         food.sprite.destroy();
         this.foods.splice(i, 1);
       }
+    }
+
+    this.processTreeCutting();
+  }
+
+  /**
+   * GPT-5.3-Codex: フィールド登場演出として、上空から落下するトゥイーンを再生する。
+   */
+  private playFallInTween(sprite: Phaser.GameObjects.Text, targetY: number): void {
+    this.tweens.add({
+      targets: sprite,
+      y: targetY,
+      duration: 360,
+      ease: 'Bounce.Out',
+    });
+  }
+
+  /**
+   * GPT-5.3-Codex: 斧が出たら近くに木を1本追加し、伐採イベントを発生させやすくする。
+   */
+  private spawnTreeNear(baseX: number, baseY: number): void {
+    const offsetX = Phaser.Math.Between(-1, 1);
+    const offsetY = Phaser.Math.Between(-1, 1);
+    const gridX = Phaser.Math.Clamp(baseX + offsetX, 1, GRID_SIZE - 2);
+    const gridY = Phaser.Math.Clamp(baseY + offsetY, 1, GRID_SIZE - 2);
+    const iso = this.toIso(gridX, gridY, this.tileSize);
+    const sprite = this.add.text(iso.x, iso.y - this.tileSize * 2.2, '🌲', {
+      fontFamily: 'sans-serif',
+      fontSize: `${Math.max(20, Math.floor(this.tileSize * 0.86))}px`,
+    }).setOrigin(0.5, 0.68);
+
+    this.itemLayer.add(sprite);
+    this.trees.push({ sprite, gridX, gridY });
+    this.playFallInTween(sprite, iso.y + this.tileSize * 0.18);
+    this.statusText.setText('🪓の気配で🌲が生えた！誰か伐採するかな？');
+  }
+
+  /**
+   * GPT-5.3-Codex: 斧を持つ生き物が木の近くに来た時だけ、確率で伐採イベントを発生させる。
+   */
+  private processTreeCutting(): void {
+    for (let i = this.trees.length - 1; i >= 0; i -= 1) {
+      const tree = this.trees[i];
+      const cutter = this.creatures.find((creature) => {
+        if (creature.carryingTool !== '🪓' || Math.random() > INTERACTION_PROBABILITY) {
+          return false;
+        }
+        const dx = creature.gridX - tree.gridX;
+        const dy = creature.gridY - tree.gridY;
+        return Math.hypot(dx, dy) < 1.4;
+      });
+
+      if (!cutter) {
+        continue;
+      }
+
+      tree.sprite.destroy();
+      this.trees.splice(i, 1);
+      cutter.mood = 'カンカン伐採中';
+      this.statusText.setText(`${cutter.emoji} が 🌲 を伐採した！`);
     }
   }
 }
