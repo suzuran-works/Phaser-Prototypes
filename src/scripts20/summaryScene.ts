@@ -14,10 +14,15 @@ type QuarterLayout = {
   tileSize: number;
 };
 
+type RabbitState = 'walking' | 'talking' | 'resting' | 'drinking' | 'bathing' | 'exiting';
+
 type Rabbit = {
+  id: number;
   emoji: string;
   mood: string;
   action: string;
+  state: RabbitState;
+  timer: number;
   gridX: number;
   gridY: number;
   targetX: number;
@@ -25,8 +30,10 @@ type Rabbit = {
   progress: number;
   speed: number;
   swaySeed: number;
+  paidOnExit: boolean;
   bodyText: Phaser.GameObjects.Text;
   infoText: Phaser.GameObjects.Text;
+  bubbleText: Phaser.GameObjects.Text;
   shadow: Phaser.GameObjects.Ellipse;
 };
 
@@ -35,17 +42,30 @@ type CoinDrop = {
   value: number;
   vx: number;
   vy: number;
+  landed: boolean;
+  lifeSec: number;
+  groundY: number;
 };
 
 const GRID_SIZE = 8;
-const RABBIT_COUNT = 14;
-const RABBIT_EMOJI = ['🐰', '🐇', '🐰', '🐇', '🐰'];
+const INITIAL_RABBIT_COUNT = 10;
+const MAX_RABBITS = 20;
+const RABBIT_EMOJI = '🐇';
 const BATH_MOODS = ['ほかほか', 'しっとり', 'ごきげん', 'まったり', 'ゆるゆる'];
-const BATH_ACTIONS = ['入浴中', '湯上がり休憩', '晩酌中', '交流中', '語らい中'];
-
 const TOP_COLORS = [0xfde68a, 0xfcd34d, 0xfbbf24, 0xf59e0b];
 const LEFT_COLORS = [0x78350f, 0x854d0e, 0x92400e, 0xb45309];
 const RIGHT_COLORS = [0x92400e, 0xa16207, 0xb45309, 0xb45309];
+const CHAIR_SPOTS = [
+  { x: 2.3, y: 5.5 },
+  { x: 5.9, y: 5.2 },
+  { x: 6.1, y: 2.4 },
+];
+const DRINK_SPOTS = [
+  { x: 2.1, y: 2.1 },
+  { x: 5.7, y: 1.6 },
+];
+const BATH_CENTER = { x: 3.8, y: 3.6 };
+const EXIT_POINT = { x: GRID_SIZE + 0.8, y: GRID_SIZE - 0.1 };
 
 class SummaryScene extends BaseResponsiveScene {
   public static readonly key = 'Scripts20SummaryScene';
@@ -62,6 +82,8 @@ class SummaryScene extends BaseResponsiveScene {
   private coins: CoinDrop[] = [];
   private elapsedSec = 0;
   private elapsedAcc = 0;
+  private spawnTimer = 0;
+  private rabbitSerial = 0;
   private currentTileSize = 42;
   private depositTotal = 0;
   private collectedTotal = 0;
@@ -108,7 +130,10 @@ class SummaryScene extends BaseResponsiveScene {
     this.effectLayer = this.add.container(0, 0);
     this.worldLayer.add([this.tileLayer, this.propLayer, this.actorLayer, this.effectLayer]);
 
-    this.createRabbits();
+    for (let i = 0; i < INITIAL_RABBIT_COUNT; i += 1) {
+      this.spawnRabbit();
+    }
+
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.collectCoin(pointer.worldX, pointer.worldY);
     });
@@ -130,7 +155,14 @@ class SummaryScene extends BaseResponsiveScene {
   public update(_: number, deltaMs: number): void {
     const deltaSec = deltaMs / 1000;
     this.elapsedAcc += deltaSec;
+    this.spawnTimer += deltaSec;
 
+    if (this.spawnTimer >= 4.5) {
+      this.spawnTimer = 0;
+      this.spawnRabbit();
+    }
+
+    this.processRabbitInteractions(deltaSec);
     this.rabbits.forEach((rabbit) => {
       this.advanceRabbit(rabbit, deltaSec);
     });
@@ -204,7 +236,7 @@ class SummaryScene extends BaseResponsiveScene {
   private drawOnsenProps(tileSize: number): void {
     this.propLayer.removeAll(true);
 
-    const bathCenter = this.toIsometric(3.8, 3.6, tileSize);
+    const bathCenter = this.toIsometric(BATH_CENTER.x, BATH_CENTER.y, tileSize);
     const bathBase = this.add.ellipse(bathCenter.x, bathCenter.y - tileSize * 0.24, tileSize * 2.8, tileSize * 1.2, 0x7dd3fc, 0.62)
       .setStrokeStyle(2, 0x0284c7, 0.7);
     const bathSteam = this.add.text(bathCenter.x, bathCenter.y - tileSize * 1.15, '♨️♨️', {
@@ -212,13 +244,7 @@ class SummaryScene extends BaseResponsiveScene {
       fontSize: `${Math.max(20, Math.floor(tileSize * 0.82))}px`,
     }).setOrigin(0.5);
 
-    const stoolPoints = [
-      { x: 2.3, y: 5.5 },
-      { x: 5.9, y: 5.2 },
-      { x: 6.1, y: 2.4 },
-    ];
-
-    const stools = stoolPoints.map((pt) => {
+    const stools = CHAIR_SPOTS.map((pt) => {
       const pos = this.toIsometric(pt.x, pt.y, tileSize);
       return this.add.text(pos.x, pos.y - tileSize * 0.45, '🪑', {
         fontFamily: 'sans-serif',
@@ -227,8 +253,7 @@ class SummaryScene extends BaseResponsiveScene {
     });
 
     const drinks = [
-      { x: 2.1, y: 2.1, emoji: '🍶' },
-      { x: 5.7, y: 1.6, emoji: '🍺' },
+      ...DRINK_SPOTS.map((spot) => ({ ...spot, emoji: '🍶' })),
       { x: 1.4, y: 4.7, emoji: '🍡' },
     ].map((drink) => {
       const pos = this.toIsometric(drink.x, drink.y, tileSize);
@@ -242,65 +267,219 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * GPT-5.3-Codex: 温泉のうさぎ住人をランダム配置で生成する。
+   * GPT-5.3-Codex: 定期入場の新規うさぎを生成してステージへ追加する。
    */
-  private createRabbits(): void {
-    this.rabbits = [];
+  private spawnRabbit(): void {
+    if (this.rabbits.length >= MAX_RABBITS) {
+      return;
+    }
 
-    for (let i = 0; i < RABBIT_COUNT; i += 1) {
-      const gridX = Phaser.Math.Between(0, GRID_SIZE - 1);
-      const gridY = Phaser.Math.Between(0, GRID_SIZE - 1);
-      const rabbit: Rabbit = {
-        emoji: Phaser.Utils.Array.GetRandom(RABBIT_EMOJI),
-        mood: Phaser.Utils.Array.GetRandom(BATH_MOODS),
-        action: Phaser.Utils.Array.GetRandom(BATH_ACTIONS),
-        gridX,
-        gridY,
-        targetX: Phaser.Math.Between(0, GRID_SIZE - 1),
-        targetY: Phaser.Math.Between(0, GRID_SIZE - 1),
-        progress: Phaser.Math.FloatBetween(0, 0.92),
-        speed: Phaser.Math.FloatBetween(0.1, 0.23),
-        swaySeed: Phaser.Math.FloatBetween(0, Math.PI * 2),
-        bodyText: this.add.text(0, 0, '🐰', {
-          fontFamily: 'sans-serif',
-          fontSize: '34px',
-        }).setOrigin(0.5, 0.9),
-        infoText: this.add.text(0, 0, '', {
-          fontFamily: 'sans-serif',
-          fontSize: '12px',
-          color: '#f8fafc',
-          align: 'center',
-        }).setOrigin(0.5, 1),
-        shadow: this.add.ellipse(0, 0, 24, 10, 0x111827, 0.35),
-      };
+    const entryX = -0.7;
+    const entryY = Phaser.Math.FloatBetween(1.2, GRID_SIZE - 1.2);
+    const rabbit: Rabbit = {
+      id: this.rabbitSerial,
+      emoji: RABBIT_EMOJI,
+      mood: Phaser.Utils.Array.GetRandom(BATH_MOODS),
+      action: '入場',
+      state: 'walking',
+      timer: Phaser.Math.FloatBetween(2.2, 5),
+      gridX: entryX,
+      gridY: entryY,
+      targetX: Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.5),
+      targetY: Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.5),
+      progress: 0,
+      speed: Phaser.Math.FloatBetween(0.14, 0.27),
+      swaySeed: Phaser.Math.FloatBetween(0, Math.PI * 2),
+      paidOnExit: false,
+      bodyText: this.add.text(0, 0, RABBIT_EMOJI, {
+        fontFamily: 'sans-serif',
+        fontSize: '34px',
+      }).setOrigin(0.5, 0.9),
+      infoText: this.add.text(0, 0, '', {
+        fontFamily: 'sans-serif',
+        fontSize: '12px',
+        color: '#f8fafc',
+        align: 'center',
+      }).setOrigin(0.5, 1),
+      bubbleText: this.add.text(0, 0, '', {
+        fontFamily: 'sans-serif',
+        fontSize: '11px',
+        color: '#111827',
+        backgroundColor: '#fef3c7cc',
+        padding: { x: 4, y: 2 },
+      }).setOrigin(0.5, 1).setVisible(false),
+      shadow: this.add.ellipse(0, 0, 24, 10, 0x111827, 0.35),
+    };
 
-      rabbit.bodyText.setText(rabbit.emoji);
-      rabbit.infoText.setText(`${rabbit.action}\n${rabbit.mood}`);
-      this.actorLayer.add([rabbit.shadow, rabbit.bodyText, rabbit.infoText]);
-      this.rabbits.push(rabbit);
+    rabbit.infoText.setText(`${rabbit.action}\n${rabbit.mood}`);
+    this.actorLayer.add([rabbit.shadow, rabbit.bodyText, rabbit.infoText, rabbit.bubbleText]);
+    this.rabbits.push(rabbit);
+    this.rabbitSerial += 1;
+  }
+
+  /**
+   * GPT-5.3-Codex: うさぎ同士の会話イベントを近接判定で発生させる。
+   */
+  private processRabbitInteractions(deltaSec: number): void {
+    // GPT-5.3-Codex: 会話中の吹き出し寿命を毎フレームで減算する。
+    this.rabbits.forEach((rabbit) => {
+      if (rabbit.state === 'talking') {
+        rabbit.timer -= deltaSec;
+        if (rabbit.timer <= 0) {
+          rabbit.state = 'walking';
+          rabbit.action = '散策中';
+          rabbit.mood = Phaser.Utils.Array.GetRandom(BATH_MOODS);
+          rabbit.bubbleText.setVisible(false);
+          rabbit.timer = Phaser.Math.FloatBetween(2, 5.2);
+          rabbit.targetX = Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.4);
+          rabbit.targetY = Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.4);
+        }
+      }
+    });
+
+    for (let i = 0; i < this.rabbits.length; i += 1) {
+      const a = this.rabbits[i];
+      if (a.state !== 'walking' || a.progress > 0.4) {
+        continue;
+      }
+
+      for (let j = i + 1; j < this.rabbits.length; j += 1) {
+        const b = this.rabbits[j];
+        if (b.state !== 'walking' || b.progress > 0.4) {
+          continue;
+        }
+
+        const dist = Phaser.Math.Distance.Between(a.gridX, a.gridY, b.gridX, b.gridY);
+        if (dist < 0.6 && Phaser.Math.FloatBetween(0, 1) < 0.16) {
+          this.startTalkingPair(a, b);
+          return;
+        }
+      }
     }
   }
 
   /**
-   * GPT-5.3-Codex: うさぎを目標マスへ移動し、到着時に入湯料金を落とす。
+   * GPT-5.3-Codex: 2匹のうさぎを会話状態に遷移させる。
+   */
+  private startTalkingPair(first: Rabbit, second: Rabbit): void {
+    const lines = ['こんばんは！', 'いい湯だね', 'また来ようね'];
+    const duration = Phaser.Math.FloatBetween(2.5, 4.5);
+
+    [first, second].forEach((rabbit, index) => {
+      rabbit.state = 'talking';
+      rabbit.timer = duration;
+      rabbit.action = 'おしゃべり';
+      rabbit.mood = 'なかよし';
+      rabbit.progress = 0;
+      rabbit.targetX = rabbit.gridX;
+      rabbit.targetY = rabbit.gridY;
+      rabbit.bubbleText.setText(lines[index]).setVisible(true);
+    });
+  }
+
+  /**
+   * GPT-5.3-Codex: うさぎを目標マスへ移動し、到着時に次行動へ遷移する。
    */
   private advanceRabbit(rabbit: Rabbit, deltaSec: number): void {
+    if (rabbit.state === 'talking' || rabbit.state === 'bathing' || rabbit.state === 'resting' || rabbit.state === 'drinking') {
+      rabbit.timer -= deltaSec;
+      if (rabbit.state === 'bathing' && rabbit.timer <= 0) {
+        rabbit.state = 'walking';
+        rabbit.action = '湯上がり';
+        rabbit.mood = 'ぽかぽか';
+        rabbit.targetX = Phaser.Math.FloatBetween(4.9, 6.8);
+        rabbit.targetY = Phaser.Math.FloatBetween(2.8, 6.5);
+        rabbit.progress = 0;
+      } else if ((rabbit.state === 'resting' || rabbit.state === 'drinking') && rabbit.timer <= 0) {
+        rabbit.state = 'walking';
+        rabbit.action = '散策中';
+        rabbit.targetX = Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.4);
+        rabbit.targetY = Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.4);
+        rabbit.progress = 0;
+      }
+      return;
+    }
+
     rabbit.progress += rabbit.speed * deltaSec;
 
-    if (rabbit.progress >= 1) {
-      rabbit.gridX = rabbit.targetX;
-      rabbit.gridY = rabbit.targetY;
-      rabbit.targetX = Phaser.Math.Between(0, GRID_SIZE - 1);
-      rabbit.targetY = Phaser.Math.Between(0, GRID_SIZE - 1);
+    if (rabbit.progress < 1) {
+      return;
+    }
+
+    rabbit.gridX = rabbit.targetX;
+    rabbit.gridY = rabbit.targetY;
+    rabbit.progress = 0;
+
+    if (rabbit.state === 'exiting') {
+      this.dropCoinAtRabbit(rabbit, Phaser.Math.Between(130, 260), '入湯料金');
+      rabbit.paidOnExit = true;
+      this.removeRabbit(rabbit);
+      return;
+    }
+
+    this.chooseNextAction(rabbit);
+  }
+
+  /**
+   * GPT-5.3-Codex: 到着したうさぎの次行動を重み付きランダムで決める。
+   */
+  private chooseNextAction(rabbit: Rabbit): void {
+    const roll = Phaser.Math.FloatBetween(0, 1);
+
+    if (roll < 0.2) {
+      rabbit.state = 'bathing';
+      rabbit.action = '入浴中';
+      rabbit.mood = 'しずか';
+      rabbit.timer = Phaser.Math.FloatBetween(3.5, 7.5);
+      rabbit.targetX = BATH_CENTER.x + Phaser.Math.FloatBetween(-0.4, 0.4);
+      rabbit.targetY = BATH_CENTER.y + Phaser.Math.FloatBetween(-0.2, 0.2);
       rabbit.progress = 0;
+      return;
+    }
 
-      rabbit.mood = Phaser.Utils.Array.GetRandom(BATH_MOODS);
-      rabbit.action = Phaser.Utils.Array.GetRandom(BATH_ACTIONS);
-      rabbit.infoText.setText(`${rabbit.action}\n${rabbit.mood}`);
+    if (roll < 0.38) {
+      const chair = Phaser.Utils.Array.GetRandom(CHAIR_SPOTS);
+      rabbit.state = 'resting';
+      rabbit.action = '椅子で休憩';
+      rabbit.mood = 'ひとやすみ';
+      rabbit.timer = Phaser.Math.FloatBetween(2.8, 6);
+      rabbit.targetX = chair.x;
+      rabbit.targetY = chair.y;
+      rabbit.progress = 0;
+      return;
+    }
 
-      if (Phaser.Math.FloatBetween(0, 1) < 0.55) {
-        this.dropCoinAtRabbit(rabbit);
-      }
+    if (roll < 0.56) {
+      const drink = Phaser.Utils.Array.GetRandom(DRINK_SPOTS);
+      rabbit.state = 'drinking';
+      rabbit.action = '晩酌中';
+      rabbit.mood = 'ほろよい';
+      rabbit.timer = Phaser.Math.FloatBetween(2.4, 5);
+      rabbit.targetX = drink.x;
+      rabbit.targetY = drink.y;
+      rabbit.progress = 0;
+      return;
+    }
+
+    if (roll > 0.9) {
+      rabbit.state = 'exiting';
+      rabbit.action = '退出中';
+      rabbit.mood = 'また来るね';
+      rabbit.targetX = EXIT_POINT.x;
+      rabbit.targetY = EXIT_POINT.y;
+      rabbit.progress = 0;
+      return;
+    }
+
+    rabbit.state = 'walking';
+    rabbit.action = '散策中';
+    rabbit.mood = Phaser.Utils.Array.GetRandom(BATH_MOODS);
+    rabbit.targetX = Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.4);
+    rabbit.targetY = Phaser.Math.FloatBetween(0.4, GRID_SIZE - 1.4);
+    rabbit.progress = 0;
+
+    if (Phaser.Math.FloatBetween(0, 1) < 0.3) {
+      this.dropCoinAtRabbit(rabbit, Phaser.Math.Between(20, 80), 'チップ');
     }
   }
 
@@ -312,41 +491,69 @@ class SummaryScene extends BaseResponsiveScene {
       const ix = Phaser.Math.Interpolation.Linear([rabbit.gridX, rabbit.targetX], rabbit.progress);
       const iy = Phaser.Math.Interpolation.Linear([rabbit.gridY, rabbit.targetY], rabbit.progress);
       const iso = this.toIsometric(ix, iy, tileSize);
-      const bob = Math.sin(this.elapsedAcc * 2.2 + rabbit.swaySeed) * Math.max(2, tileSize * 0.06);
+      const idle = rabbit.state === 'bathing' || rabbit.state === 'resting' || rabbit.state === 'drinking' || rabbit.state === 'talking';
+      const bob = idle ? 0 : Math.sin(this.elapsedAcc * 2.2 + rabbit.swaySeed) * Math.max(2, tileSize * 0.06);
 
       rabbit.shadow.setPosition(iso.x, iso.y + tileSize * 0.2).setSize(tileSize * 0.58, tileSize * 0.2);
       rabbit.bodyText.setPosition(iso.x, iso.y - tileSize * 0.26 + bob).setFontSize(Math.max(20, Math.floor(tileSize * 0.76)));
-      rabbit.infoText.setPosition(iso.x, iso.y - tileSize * 0.74 + bob).setFontSize(Math.max(9, Math.floor(tileSize * 0.21)));
+      rabbit.infoText
+        .setPosition(iso.x, iso.y - tileSize * 0.74 + bob)
+        .setFontSize(Math.max(9, Math.floor(tileSize * 0.21)))
+        .setText(`${rabbit.action}\n${rabbit.mood}`);
+
+      rabbit.bubbleText
+        .setPosition(iso.x, iso.y - tileSize * 1.05)
+        .setFontSize(Math.max(9, Math.floor(tileSize * 0.2)));
     });
   }
 
   /**
-   * GPT-5.3-Codex: うさぎの位置に入湯料金コインを生成して未回収額へ加算する。
+   * GPT-5.3-Codex: うさぎの位置に料金コインを生成して未回収額へ加算する。
    */
-  private dropCoinAtRabbit(rabbit: Rabbit): void {
+  private dropCoinAtRabbit(rabbit: Rabbit, minValue: number, label: string): void {
     const iso = this.toIsometric(rabbit.gridX, rabbit.gridY, this.currentTileSize);
-    const coin = this.add.text(iso.x + Phaser.Math.Between(-8, 8), iso.y - this.currentTileSize * 0.5, '💴', {
+    const coin = this.add.text(iso.x + Phaser.Math.Between(-8, 8), iso.y - this.currentTileSize * 0.72, '💰', {
       fontFamily: 'sans-serif',
       fontSize: `${Math.max(18, Math.floor(this.currentTileSize * 0.58))}px`,
     }).setOrigin(0.5).setInteractive({ useHandCursor: true });
 
-    const value = Phaser.Math.Between(30, 120);
+    const value = Phaser.Math.Between(minValue, minValue + 90);
     this.depositTotal += value;
     this.pendingTotal += value;
 
     const drop: CoinDrop = {
       sprite: coin,
       value,
-      vx: Phaser.Math.FloatBetween(-6, 6),
-      vy: Phaser.Math.FloatBetween(14, 26),
+      vx: Phaser.Math.FloatBetween(-12, 12),
+      vy: Phaser.Math.FloatBetween(30, 52),
+      landed: false,
+      lifeSec: 0,
+      groundY: iso.y + this.currentTileSize * 0.2,
     };
 
+    coin.setData('label', label);
     coin.on('pointerdown', () => {
       this.collectSpecificCoin(drop);
     });
 
     this.coins.push(drop);
     this.effectLayer.add(coin);
+  }
+
+  /**
+   * GPT-5.3-Codex: 退出完了したうさぎを安全に破棄する。
+   */
+  private removeRabbit(rabbit: Rabbit): void {
+    const index = this.rabbits.indexOf(rabbit);
+    if (index < 0) {
+      return;
+    }
+
+    rabbit.shadow.destroy();
+    rabbit.bodyText.destroy();
+    rabbit.infoText.destroy();
+    rabbit.bubbleText.destroy();
+    this.rabbits.splice(index, 1);
   }
 
   /**
@@ -379,20 +586,29 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * GPT-5.3-Codex: 放置コインのゆらぎ落下と寿命処理を行う。
+   * GPT-5.3-Codex: 料金コインを落下後に床へ残し、一定時間で消去する。
    */
   private updateCoins(deltaSec: number): void {
     const expired: CoinDrop[] = [];
-
     this.coins.forEach((drop) => {
-      drop.vy += 5 * deltaSec;
-      drop.sprite.x += drop.vx * deltaSec;
-      drop.sprite.y += drop.vy * deltaSec;
-      drop.sprite.rotation += 0.6 * deltaSec;
-      drop.sprite.alpha = Math.max(0.5, drop.sprite.alpha - 0.03 * deltaSec);
-
-      if (drop.sprite.y > this.scale.height + 20) {
-        expired.push(drop);
+      if (!drop.landed) {
+        drop.vy += 36 * deltaSec;
+        drop.sprite.x += drop.vx * deltaSec;
+        drop.sprite.y += drop.vy * deltaSec;
+        if (drop.sprite.y >= drop.groundY) {
+          drop.sprite.y = drop.groundY;
+          drop.vx = 0;
+          drop.vy = 0;
+          drop.landed = true;
+          drop.sprite.rotation = 0;
+        } else {
+          drop.sprite.rotation += 0.7 * deltaSec;
+        }
+      } else {
+        drop.lifeSec += deltaSec;
+        if (drop.lifeSec > 16) {
+          expired.push(drop);
+        }
       }
     });
 
@@ -410,10 +626,10 @@ class SummaryScene extends BaseResponsiveScene {
    * GPT-5.3-Codex: 観察情報と入湯料金の回収状況をHUD表示する。
    */
   private refreshHud(): void {
-    const focused = this.rabbits[Math.floor((this.elapsedSec / 2) % this.rabbits.length)];
+    const focused = this.rabbits[Math.floor((this.elapsedSec / 2) % Math.max(1, this.rabbits.length))];
     this.hudText.setText(
-      `経過 ${this.elapsedSec}s | 注目: ${focused?.emoji ?? '🐰'} ${focused?.action ?? '入浴中'}\n` +
-      `落とした総額 ${this.depositTotal}円 / 回収 ${this.collectedTotal}円 / 未回収 ${this.pendingTotal}円`,
+      `経過 ${this.elapsedSec}s | うさぎ ${this.rabbits.length}匹 | 注目: ${focused?.emoji ?? '🐇'} ${focused?.action ?? '入場待ち'}\n`
+      + `落とした総額 ${this.depositTotal}円 / 回収 ${this.collectedTotal}円 / 未回収 ${this.pendingTotal}円`,
     );
   }
 
