@@ -19,9 +19,19 @@ type Cell = {
   y: number;
 };
 
-type MonkeyState = 'idle' | 'appealing' | 'angry';
+type MonkeyState = 'idle' | 'appealing' | 'angry' | 'sleeping';
 
 type FlyingType = 'banana' | 'poop';
+type GroundItemType = 'banana' | 'poop';
+
+type GroundItem = {
+  id: number;
+  type: GroundItemType;
+  text: Phaser.GameObjects.Text;
+  gridX: number;
+  gridY: number;
+  life: number;
+};
 
 const WORLD_SIZE = 8;
 const TILE_TOP_COLOR = 0x22c55e;
@@ -65,8 +75,11 @@ class SummaryScene extends BaseResponsiveScene {
   private monkeyMoveSeeds: number[] = [];
   private monkeyReactionTimers: number[] = [];
   private monkeyReactionEmojis: string[] = [];
+  private monkeySleepTimers: number[] = [];
+  private monkeyWorldPositions: Phaser.Math.Vector2[] = [];
   private customerReactionTimers: number[] = [];
   private customerReactionEmojis: string[] = [];
+  private monkeyFoodTargets: Array<number | null> = [];
   private monkeyAppealTime = 0;
   private monkeyRevengeTime = 0;
   private cells: Cell[] = [];
@@ -75,6 +88,8 @@ class SummaryScene extends BaseResponsiveScene {
   private angryMonkeyCount = 0;
   private poopThrowCount = 0;
   private flyingItems: Phaser.GameObjects.Text[] = [];
+  private groundItems: GroundItem[] = [];
+  private groundItemSequence = 0;
   private currentTileSize = 44;
 
   /**
@@ -152,7 +167,11 @@ class SummaryScene extends BaseResponsiveScene {
    * GPT-5.3-Codex: 画面サイズに応じたUIとワールドのレイアウト値を計算する。
    */
   protected computeLayout(width: number, height: number): ZooLayout {
-    const tileSize = Math.max(30, Math.min(56, Math.floor(Math.min(width, height) * 0.052)));
+    const uiTop = Math.max(96, height * 0.15);
+    const availableHeight = Math.max(180, height - uiTop - 18);
+    const tileFromHeight = Math.floor(availableHeight / 8.8);
+    const tileFromWidth = Math.floor(width / 18);
+    const tileSize = Math.max(24, Math.min(56, tileFromHeight, tileFromWidth));
     return {
       width,
       height,
@@ -160,7 +179,7 @@ class SummaryScene extends BaseResponsiveScene {
       subtitleY: Math.max(58, height * 0.08),
       statusY: Math.max(96, height * 0.135),
       worldCenterX: width * 0.5,
-      worldCenterY: Math.max(height * 0.62, 300),
+      worldCenterY: uiTop + availableHeight * 0.5,
       tileSize,
     };
   }
@@ -266,7 +285,7 @@ class SummaryScene extends BaseResponsiveScene {
         fontFamily: 'sans-serif',
         fontSize: '42px',
       }).setOrigin(0.5, 0.9);
-      const mood = this.add.text(0, 0, '😶', {
+      const mood = this.add.text(0, 0, '➖', {
         fontFamily: 'sans-serif',
         fontSize: '22px',
       }).setOrigin(0.5, 1);
@@ -281,6 +300,9 @@ class SummaryScene extends BaseResponsiveScene {
       this.monkeyMoveSeeds.push(index * 1.33 + Math.random());
       this.monkeyReactionTimers.push(0);
       this.monkeyReactionEmojis.push('');
+      this.monkeySleepTimers.push(0);
+      this.monkeyWorldPositions.push(new Phaser.Math.Vector2(MONKEY_SPOTS[index].x, MONKEY_SPOTS[index].y));
+      this.monkeyFoodTargets.push(null);
       this.actorLayer.add([shadow, mood, monkey]);
     });
 
@@ -289,16 +311,16 @@ class SummaryScene extends BaseResponsiveScene {
         fontFamily: 'sans-serif',
         fontSize: '34px',
       }).setOrigin(0.5, 0.9);
-      const mood = this.add.text(0, 0, '🙂', {
+      const mood = this.add.text(0, 0, '🫶', {
         fontFamily: 'sans-serif',
         fontSize: '20px',
       }).setOrigin(0.5, 1);
       this.customerTexts.push(customer);
       this.customerMoodTexts.push(mood);
       this.customerReactionTimers.push(0);
-      this.customerReactionEmojis.push('🙂');
+      this.customerReactionEmojis.push('🫶');
       this.actorLayer.add([mood, customer]);
-      this.setCustomerReaction(index, '🙂', 0.5);
+      this.setCustomerReaction(index, '🫶', 0.5);
     });
 
     this.repositionActors(this.currentTileSize);
@@ -310,7 +332,10 @@ class SummaryScene extends BaseResponsiveScene {
   private repositionActors(tileSize: number): void {
     this.monkeyTexts.forEach((monkey, index) => {
       const spot = MONKEY_SPOTS[index];
-      const iso = this.toIsometric(spot.x, spot.y, tileSize);
+      if (!this.monkeyWorldPositions[index]) {
+        this.monkeyWorldPositions[index] = new Phaser.Math.Vector2(spot.x, spot.y);
+      }
+      const iso = this.toIsometric(this.monkeyWorldPositions[index].x, this.monkeyWorldPositions[index].y, tileSize);
       monkey.setPosition(iso.x, iso.y - tileSize * 0.35);
       monkey.setFontSize(Math.max(28, Math.floor(tileSize * 0.96)));
       this.monkeyMoodTexts[index].setPosition(iso.x, iso.y - tileSize * 0.82).setFontSize(Math.max(16, Math.floor(tileSize * 0.42)));
@@ -323,6 +348,11 @@ class SummaryScene extends BaseResponsiveScene {
       customer.setPosition(iso.x, iso.y - tileSize * 0.32);
       customer.setFontSize(Math.max(24, Math.floor(tileSize * 0.82)));
       this.customerMoodTexts[index].setPosition(iso.x, iso.y - tileSize * 0.78).setFontSize(Math.max(14, Math.floor(tileSize * 0.38)));
+    });
+
+    this.groundItems.forEach((item) => {
+      const iso = this.toIsometric(item.gridX, item.gridY, tileSize);
+      item.text.setPosition(iso.x, iso.y - tileSize * 0.18).setFontSize(Math.max(16, Math.floor(tileSize * 0.48)));
     });
   }
 
@@ -338,28 +368,38 @@ class SummaryScene extends BaseResponsiveScene {
         : Math.max(0, this.monkeyAppealScores[index] - deltaSeconds * 0.5);
 
       this.monkeyHungerTimes[index] += deltaSeconds;
+      this.monkeySleepTimers[index] = Math.max(0, this.monkeySleepTimers[index] - deltaSeconds);
+      const isSleeping = this.monkeySleepTimers[index] > 0;
       const isAngry = this.monkeyHungerTimes[index] > 6.8;
-      this.monkeyStates[index] = isAngry ? 'angry' : (isAppealing ? 'appealing' : 'idle');
+      this.monkeyStates[index] = isSleeping
+        ? 'sleeping'
+        : (isAngry ? 'angry' : (isAppealing ? 'appealing' : 'idle'));
 
-      const spot = MONKEY_SPOTS[index];
-      const base = this.toIsometric(spot.x, spot.y, this.currentTileSize);
-      const driftX = Math.sin(this.monkeyAppealTime * 1.2 + this.monkeyMoveSeeds[index]) * this.currentTileSize * 0.12;
-      const driftY = Math.cos(this.monkeyAppealTime * 0.9 + this.monkeyMoveSeeds[index] * 1.4) * this.currentTileSize * 0.06;
-      const jump = isAppealing ? Math.sin(this.monkeyAppealTime * 8 + index) * 6 : Math.sin(this.monkeyAppealTime * 3 + index) * 2;
+      this.updateMonkeyWorldPosition(index, deltaSeconds, isSleeping, isAngry);
+      const worldPos = this.monkeyWorldPositions[index];
+      const base = this.toIsometric(worldPos.x, worldPos.y, this.currentTileSize);
+      const driftX = isSleeping ? 0 : Math.sin(this.monkeyAppealTime * 1.2 + this.monkeyMoveSeeds[index]) * this.currentTileSize * 0.08;
+      const driftY = isSleeping ? 0 : Math.cos(this.monkeyAppealTime * 0.9 + this.monkeyMoveSeeds[index] * 1.4) * this.currentTileSize * 0.04;
+      const jump = isSleeping ? 0 : (isAppealing ? Math.sin(this.monkeyAppealTime * 8 + index) * 5 : Math.sin(this.monkeyAppealTime * 3 + index) * 1.7);
       const jumpOffset = jump * deltaSeconds * 24;
       monkey.setPosition(base.x + driftX, base.y - this.currentTileSize * 0.35 + driftY + jumpOffset);
       this.monkeyShadows[index].setPosition(base.x + driftX, base.y - this.currentTileSize * 0.05 + driftY * 0.45);
       const angryBoost = isAngry ? 0.1 : 0;
       const appealBoost = isAppealing ? 0.08 : 0;
-      this.monkeyBaseScales[index] = 1 + angryBoost + appealBoost;
+      const sleepScale = isSleeping ? -0.08 : 0;
+      this.monkeyBaseScales[index] = 1 + angryBoost + appealBoost + sleepScale;
       monkey.setScale(this.monkeyBaseScales[index]);
 
       // GPT-5.3-Codex: 怒り・アピール・通常とリアクションを統合して猿の感情を描画する。
-      monkey.setTint(isAngry ? 0xffb4b4 : (isAppealing ? 0xfff7d6 : 0xffffff));
+      monkey.setTint(isSleeping ? 0xdbeafe : (isAngry ? 0xffb4b4 : (isAppealing ? 0xfff7d6 : 0xffffff)));
       this.monkeyReactionTimers[index] = Math.max(0, this.monkeyReactionTimers[index] - deltaSeconds);
-      const autoMood = isAngry ? '💢' : (isAppealing ? '✨' : '😶');
+      const autoMood = isSleeping ? '💤' : (isAngry ? '💢' : (isAppealing ? '✨' : '➖'));
       const mood = this.monkeyReactionTimers[index] > 0 ? this.monkeyReactionEmojis[index] : autoMood;
       this.monkeyMoodTexts[index].setText(mood).setPosition(base.x + driftX, base.y - this.currentTileSize * 0.84 + driftY * 0.7);
+
+      if (!isSleeping && !isAngry && this.monkeyFoodTargets[index] === null && Math.random() < deltaSeconds * 0.045) {
+        this.monkeySleepTimers[index] = Phaser.Math.FloatBetween(1.8, 4.6);
+      }
     });
   }
 
@@ -376,7 +416,7 @@ class SummaryScene extends BaseResponsiveScene {
       customer.setScale(1 + Math.max(0, bobY) * 0.006);
 
       this.customerReactionTimers[index] = Math.max(0, this.customerReactionTimers[index] - deltaSeconds);
-      const mood = this.customerReactionTimers[index] > 0 ? this.customerReactionEmojis[index] : '🙂';
+      const mood = this.customerReactionTimers[index] > 0 ? this.customerReactionEmojis[index] : '🫶';
       this.customerMoodTexts[index].setPosition(base.x + swayX, base.y - this.currentTileSize * 0.78 + bobY * 0.8).setText(mood);
     });
   }
@@ -393,21 +433,33 @@ class SummaryScene extends BaseResponsiveScene {
     const monkeyIndex = this.chooseBananaTargetIndex();
     if (monkeyIndex < 0) {
       this.skippedFeedCount += 1;
-      this.setCustomerReaction(customerIndex, '🤔', 1.2);
+      this.setCustomerReaction(customerIndex, '💭', 1.2);
       return;
     }
 
     const customer = this.customerTexts[customerIndex];
-    const monkey = this.monkeyTexts[monkeyIndex];
-    const banana = this.createFlyingItem(BANANA_EMOJI, customer.x, customer.y - 12, monkey.x, monkey.y - 26, 'banana');
+    const missPoint = this.pickMissGridPointInMonkeyArea();
+    const hitPoint = this.toIsometric(this.monkeyWorldPositions[monkeyIndex].x, this.monkeyWorldPositions[monkeyIndex].y, this.currentTileSize);
+    const willHit = Math.random() < 0.68;
+    const banana = this.createFlyingItem(
+      BANANA_EMOJI,
+      customer.x,
+      customer.y - 12,
+      willHit ? hitPoint.x : missPoint.x,
+      willHit ? hitPoint.y - this.currentTileSize * 0.2 : missPoint.y,
+      'banana',
+    );
     banana.setData('targetMonkeyIndex', monkeyIndex);
     banana.setData('targetCustomerIndex', customerIndex);
+    banana.setData('willHit', willHit);
+    banana.setData('missGridX', missPoint.gridX);
+    banana.setData('missGridY', missPoint.gridY);
     this.actorLayer.add(banana);
 
     this.bananaFeedCount += 1;
     this.monkeyHungerTimes[monkeyIndex] = Math.max(0, this.monkeyHungerTimes[monkeyIndex] - 4.8);
     this.monkeyAppealScores[monkeyIndex] = Math.max(0, this.monkeyAppealScores[monkeyIndex] - 0.34);
-    this.setCustomerReaction(customerIndex, '😊', 1.4);
+    this.setCustomerReaction(customerIndex, willHit ? '🎉' : '💨', 1.4);
   }
 
   /**
@@ -431,12 +483,24 @@ class SummaryScene extends BaseResponsiveScene {
     const customerIndex = Phaser.Math.Between(0, this.customerTexts.length - 1);
     const monkey = this.monkeyTexts[monkeyIndex];
     const customer = this.customerTexts[customerIndex];
-    const poop = this.createFlyingItem(POOP_EMOJI, monkey.x, monkey.y - 24, customer.x, customer.y - 24, 'poop');
+    const missPoint = this.pickMissGridPointNearCustomerArea();
+    const willHit = Math.random() < 0.6;
+    const poop = this.createFlyingItem(
+      POOP_EMOJI,
+      monkey.x,
+      monkey.y - 24,
+      willHit ? customer.x : missPoint.x,
+      willHit ? customer.y - 24 : missPoint.y,
+      'poop',
+    );
     poop.setData('targetMonkeyIndex', monkeyIndex);
     poop.setData('targetCustomerIndex', customerIndex);
+    poop.setData('willHit', willHit);
+    poop.setData('missGridX', missPoint.gridX);
+    poop.setData('missGridY', missPoint.gridY);
     this.actorLayer.add(poop);
     this.poopThrowCount += 1;
-    this.setMonkeyReaction(monkeyIndex, '😤', 1.2);
+    this.setMonkeyReaction(monkeyIndex, '💢', 1.2);
   }
 
   /**
@@ -517,13 +581,20 @@ class SummaryScene extends BaseResponsiveScene {
       if (progress >= 1) {
         const monkeyIndex = Number(item.getData('targetMonkeyIndex'));
         const customerIndex = Number(item.getData('targetCustomerIndex'));
-        this.handleItemImpact(type, monkeyIndex, customerIndex);
+        const willHit = Boolean(item.getData('willHit'));
+        if (willHit) {
+          this.handleItemImpact(type, monkeyIndex, customerIndex);
+        } else {
+          this.dropGroundItem(type, Number(item.getData('missGridX')), Number(item.getData('missGridY')));
+        }
         item.destroy();
         return false;
       }
 
       return true;
     });
+
+    this.updateGroundItems(deltaSeconds);
   }
 
   /**
@@ -531,14 +602,162 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private handleItemImpact(type: FlyingType, monkeyIndex: number, customerIndex: number): void {
     if (type === 'banana') {
-      this.setMonkeyReaction(monkeyIndex, '😋', 1.8);
-      this.setCustomerReaction(customerIndex, '👏', 1.3);
+      this.setMonkeyReaction(monkeyIndex, '🍌', 1.8);
+      this.setCustomerReaction(customerIndex, '✨', 1.3);
       return;
     }
 
-    this.setMonkeyReaction(monkeyIndex, '😈', 1.6);
-    const reaction = Math.random() < 0.5 ? '🤢' : '😱';
+    this.setMonkeyReaction(monkeyIndex, '🔥', 1.6);
+    const reaction = Math.random() < 0.5 ? '💥' : '💔';
     this.setCustomerReaction(customerIndex, reaction, 2.2);
+  }
+
+  /**
+   * GPT-5.3-Codex: 落下物を地面に一定時間残し、必要なら猿の回収対象として割り当てる。
+   */
+  private dropGroundItem(type: GroundItemType, gridX: number, gridY: number): void {
+    const iso = this.toIsometric(gridX, gridY, this.currentTileSize);
+    const text = this.add.text(iso.x, iso.y - this.currentTileSize * 0.18, type === 'banana' ? BANANA_EMOJI : POOP_EMOJI, {
+      fontFamily: 'sans-serif',
+      fontSize: `${Math.max(16, Math.floor(this.currentTileSize * 0.48))}px`,
+    }).setOrigin(0.5, 0.9);
+    this.actorLayer.add(text);
+
+    const item: GroundItem = {
+      id: this.groundItemSequence,
+      type,
+      text,
+      gridX,
+      gridY,
+      life: type === 'banana' ? 6.5 : 5.2,
+    };
+    this.groundItemSequence += 1;
+    this.groundItems.push(item);
+
+    if (type === 'banana') {
+      this.assignMonkeyToBanana(item.id);
+    }
+  }
+
+  /**
+   * GPT-5.3-Codex: 地面に残った落下物の寿命を減算し、期限切れを破棄する。
+   */
+  private updateGroundItems(deltaSeconds: number): void {
+    this.groundItems = this.groundItems.filter((item) => {
+      item.life -= deltaSeconds;
+      if (item.life <= 0) {
+        item.text.destroy();
+        this.clearFoodTargetByGroundId(item.id);
+        return false;
+      }
+
+      item.text.setAlpha(item.life < 1.2 ? Math.max(0.2, item.life / 1.2) : 1);
+      return true;
+    });
+  }
+
+  /**
+   * GPT-5.3-Codex: 落ちたバナナへ向けた猿の移動と回収処理を進める。
+   */
+  private updateMonkeyWorldPosition(index: number, deltaSeconds: number, isSleeping: boolean, isAngry: boolean): void {
+    const worldPos = this.monkeyWorldPositions[index];
+    const home = MONKEY_SPOTS[index];
+    const targetGroundId = this.monkeyFoodTargets[index];
+    const targetItem = this.groundItems.find((item) => item.id === targetGroundId && item.type === 'banana');
+    if (targetGroundId !== null && !targetItem) {
+      this.monkeyFoodTargets[index] = null;
+    }
+
+    const canEat = !isSleeping && !isAngry;
+    const targetX = canEat && targetItem ? targetItem.gridX : home.x;
+    const targetY = canEat && targetItem ? targetItem.gridY : home.y;
+    const speed = canEat && targetItem ? 1.6 : 0.9;
+    const lerp = Math.min(1, deltaSeconds * speed);
+
+    worldPos.x = Phaser.Math.Linear(worldPos.x, targetX, lerp);
+    worldPos.y = Phaser.Math.Linear(worldPos.y, targetY, lerp);
+
+    if (canEat && targetItem) {
+      const distance = Phaser.Math.Distance.Between(worldPos.x, worldPos.y, targetItem.gridX, targetItem.gridY);
+      if (distance < 0.12) {
+        this.consumeGroundBanana(index, targetItem.id);
+      }
+    }
+  }
+
+  /**
+   * GPT-5.3-Codex: 猿がバナナを食べた際の後処理をまとめて実行する。
+   */
+  private consumeGroundBanana(monkeyIndex: number, groundId: number): void {
+    const target = this.groundItems.find((item) => item.id === groundId);
+    if (!target || target.type !== 'banana') {
+      return;
+    }
+
+    target.text.destroy();
+    this.groundItems = this.groundItems.filter((item) => item.id !== groundId);
+    this.clearFoodTargetByGroundId(groundId);
+    this.monkeyHungerTimes[monkeyIndex] = Math.max(0, this.monkeyHungerTimes[monkeyIndex] - 5.2);
+    this.setMonkeyReaction(monkeyIndex, '🍌', 1.4);
+  }
+
+  /**
+   * GPT-5.3-Codex: 落ちたバナナに最寄りの猿を割り当てる。
+   */
+  private assignMonkeyToBanana(groundId: number): void {
+    const banana = this.groundItems.find((item) => item.id === groundId && item.type === 'banana');
+    if (!banana) {
+      return;
+    }
+
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    this.monkeyWorldPositions.forEach((position, index) => {
+      if (this.monkeyStates[index] === 'sleeping') {
+        return;
+      }
+      const distance = Phaser.Math.Distance.Between(position.x, position.y, banana.gridX, banana.gridY);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex >= 0) {
+      this.monkeyFoodTargets[bestIndex] = groundId;
+    }
+  }
+
+  /**
+   * GPT-5.3-Codex: 期限切れ等で消える落下物に紐づく猿の目的地を解除する。
+   */
+  private clearFoodTargetByGroundId(groundId: number): void {
+    this.monkeyFoodTargets = this.monkeyFoodTargets.map((targetId) => (targetId === groundId ? null : targetId));
+  }
+
+  /**
+   * GPT-5.3-Codex: 猿エリア内に着地する投擲の外れ座標を生成する。
+   */
+  private pickMissGridPointInMonkeyArea(): { x: number; y: number; gridX: number; gridY: number } {
+    const gridX = Phaser.Math.FloatBetween(2.2, 5.0);
+    const gridY = Phaser.Math.FloatBetween(2.2, 5.0);
+    const iso = this.toIsometric(gridX, gridY, this.currentTileSize);
+    return { x: iso.x, y: iso.y - this.currentTileSize * 0.14, gridX, gridY };
+  }
+
+  /**
+   * GPT-5.3-Codex: 観客側へ外れる💩の着地点をランダムに生成する。
+   */
+  private pickMissGridPointNearCustomerArea(): { x: number; y: number; gridX: number; gridY: number } {
+    const edgeSpots = [
+      { x: Phaser.Math.FloatBetween(0.6, 2.2), y: Phaser.Math.FloatBetween(0.8, 2.4) },
+      { x: Phaser.Math.FloatBetween(5.7, 7.0), y: Phaser.Math.FloatBetween(0.8, 2.5) },
+      { x: Phaser.Math.FloatBetween(0.8, 2.5), y: Phaser.Math.FloatBetween(5.5, 7.0) },
+      { x: Phaser.Math.FloatBetween(5.6, 7.1), y: Phaser.Math.FloatBetween(5.4, 7.1) },
+    ];
+    const pick = Phaser.Utils.Array.GetRandom(edgeSpots);
+    const iso = this.toIsometric(pick.x, pick.y, this.currentTileSize);
+    return { x: iso.x, y: iso.y - this.currentTileSize * 0.14, gridX: pick.x, gridY: pick.y };
   }
 
   /**
