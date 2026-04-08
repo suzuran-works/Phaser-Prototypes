@@ -50,6 +50,8 @@ class SummaryScene extends BaseResponsiveScene {
   private subtitleText!: Phaser.GameObjects.Text;
   private statusText!: Phaser.GameObjects.Text;
   private worldLayer!: Phaser.GameObjects.Container;
+  private groundLayer!: Phaser.GameObjects.Container;
+  private residentLayer!: Phaser.GameObjects.Container;
   private residents: Resident[] = [];
   private cells: Cell[] = [];
   private elapsedSeconds = 0;
@@ -88,6 +90,9 @@ class SummaryScene extends BaseResponsiveScene {
     }).setOrigin(0.5, 0);
 
     this.worldLayer = this.add.container(0, 0);
+    this.groundLayer = this.add.container(0, 0);
+    this.residentLayer = this.add.container(0, 0);
+    this.worldLayer.add([this.groundLayer, this.residentLayer]);
     this.buildVillageGround();
     this.createResidents();
 
@@ -161,7 +166,7 @@ class SummaryScene extends BaseResponsiveScene {
    * Codex: クォータービューの地面と建物を描画する。
    */
   private redrawVillage(tileSize: number): void {
-    this.worldLayer.removeAll(true);
+    this.groundLayer.removeAll(true);
 
     this.cells.forEach((cell) => {
       const isoPoint = this.toIsometric(cell.x, cell.y, tileSize);
@@ -190,7 +195,7 @@ class SummaryScene extends BaseResponsiveScene {
         0, depth - halfH * 0.5,
       ], TILE_RIGHT_COLOR, 0.75);
 
-      this.worldLayer.add([left, right, top]);
+      this.groundLayer.add([left, right, top]);
     });
 
     this.drawBuilding(tileSize, 1.5, 2.1, 1.4);
@@ -210,7 +215,7 @@ class SummaryScene extends BaseResponsiveScene {
     const body = this.add.rectangle(base.x, base.y - height * 0.6, width, height, BUILDING_COLOR, 0.9)
       .setStrokeStyle(2, BUILDING_EDGE_COLOR, 0.55);
     const roof = this.add.ellipse(base.x, base.y - height - depth * 0.1, width * 1.05, depth, 0x64748b, 0.92);
-    this.worldLayer.add([body, roof]);
+    this.groundLayer.add([body, roof]);
   }
 
   /**
@@ -231,7 +236,7 @@ class SummaryScene extends BaseResponsiveScene {
         fontSize: '34px',
       }).setOrigin(0.5);
 
-      this.worldLayer.add([shadow, text]);
+      this.residentLayer.add([shadow, text]);
 
       this.residents.push({
         emoji: text.text,
