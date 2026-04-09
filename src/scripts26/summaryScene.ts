@@ -33,6 +33,8 @@ type CatAgent = {
   dirX: number;
   dirY: number;
   stepCooldown: number;
+  pathHistory: string[];
+  forcedPause: number;
 };
 
 type MergeEffect = {
@@ -132,11 +134,10 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 猫の行動・2ボールの転がり・落下球の更新を行う。
+   * Codex: 猫の行動・落下球の更新・演出更新を行う。
    */
   public update(_time: number, delta: number): void {
     const dt = Math.min(0.05, delta / 1000);
-    this.updateRollingTwos(dt);
     this.updateFallingBalls(dt);
     this.updateCats(dt);
     this.updateMergeEffects(dt);
@@ -226,38 +227,6 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 値2のボールだけを確率移動させ「転がっている」状態を再現する。
-   */
-  private updateRollingTwos(dt: number): void {
-    if (Phaser.Math.FloatBetween(0, 1) > dt * 2.2) {
-      return;
-    }
-
-    const twos = this.balls.filter((ball) => ball.value === 2);
-    if (twos.length === 0) {
-      return;
-    }
-
-    const mover = Phaser.Utils.Array.GetRandom(twos);
-    if (this.cats.some((cat) => cat.carryValue === null && cat.gx === mover.gx && cat.gy === mover.gy)) {
-      return;
-    }
-
-    const neighbors = this.getNeighborCells(mover.gx, mover.gy).filter((cell) => (
-      !this.findBallAt(cell.gx, cell.gy)
-      && !this.isCatOnCell(cell.gx, cell.gy)
-    ));
-
-    if (neighbors.length === 0) {
-      return;
-    }
-
-    const next = Phaser.Utils.Array.GetRandom(neighbors);
-    mover.gx = next.gx;
-    mover.gy = next.gy;
-  }
-
-  /**
    * Codex: 落下中ボールの重力演算と着地時のマージ/配置を処理する。
    */
   private updateFallingBalls(dt: number): void {
@@ -304,8 +273,13 @@ class SummaryScene extends BaseResponsiveScene {
       cat.y = targetPos.y;
       cat.gx = cat.targetGx;
       cat.gy = cat.targetGy;
+      cat.pathHistory = this.pushPathHistory(cat.pathHistory, cat.gx, cat.gy);
       cat.stepCooldown = Math.max(0, cat.stepCooldown - dt);
+      cat.forcedPause = Math.max(0, cat.forcedPause - dt);
       if (cat.stepCooldown > 0) {
+        return;
+      }
+      if (cat.forcedPause > 0) {
         return;
       }
 
@@ -313,7 +287,7 @@ class SummaryScene extends BaseResponsiveScene {
 
       const next = this.chooseNextCatStep(cat);
       if (!next) {
-        cat.stepCooldown = 0.12;
+        cat.stepCooldown = 0.2;
         return;
       }
 
@@ -321,7 +295,7 @@ class SummaryScene extends BaseResponsiveScene {
       cat.dirY = Phaser.Math.Clamp(next.gy - cat.gy, -1, 1);
       cat.targetGx = next.gx;
       cat.targetGy = next.gy;
-      cat.stepCooldown = 0.04;
+      cat.stepCooldown = 0.12;
     });
   }
 
@@ -347,7 +321,13 @@ class SummaryScene extends BaseResponsiveScene {
       return da - db;
     });
 
-    return candidates[0];
+    const next = candidates.find((candidate) => !this.willRepeatPath(cat, candidate.gx, candidate.gy));
+    if (next) {
+      return next;
+    }
+
+    cat.forcedPause = 0.36;
+    return null;
   }
 
   /**
@@ -696,13 +676,43 @@ class SummaryScene extends BaseResponsiveScene {
         targetGy: start.gy,
         x: p.x,
         y: p.y,
-        speed: Phaser.Math.FloatBetween(220, 280),
+        speed: Phaser.Math.FloatBetween(132, 164),
         carryValue: null,
         dirX: start.dirX,
         dirY: start.dirY,
         stepCooldown: 0,
+        pathHistory: [`${start.gx},${start.gy}`],
+        forcedPause: 0,
       };
     });
+  }
+
+  /**
+   * Codex: 猫の移動履歴を固定長で更新する。
+   */
+  private pushPathHistory(history: string[], gx: number, gy: number): string[] {
+    const key = `${gx},${gy}`;
+    if (history[history.length - 1] === key) {
+      return history;
+    }
+
+    const nextHistory = [...history, key];
+    return nextHistory.slice(-7);
+  }
+
+  /**
+   * Codex: 次の移動が同一パターン反復になるかを判定する。
+   */
+  private willRepeatPath(cat: CatAgent, nextGx: number, nextGy: number): boolean {
+    const simulated = [...cat.pathHistory, `${nextGx},${nextGy}`].slice(-6);
+    if (simulated.length < 6) {
+      return false;
+    }
+
+    const [a, b, c, d, e, f] = simulated;
+    const repeatsTwoStep = a === c && c === e && b === d && d === f;
+    const repeatsThreeStep = a === d && b === e && c === f;
+    return repeatsTwoStep || repeatsThreeStep;
   }
 
   /**
