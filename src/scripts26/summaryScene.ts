@@ -21,14 +21,26 @@ type FallingBall = {
 };
 
 type CatAgent = {
+  id: number;
   gx: number;
   gy: number;
+  targetGx: number;
+  targetGy: number;
   x: number;
   y: number;
+  speed: number;
   carryValue: number | null;
   dirX: number;
   dirY: number;
   stepCooldown: number;
+};
+
+type MergeEffect = {
+  x: number;
+  y: number;
+  value: number;
+  age: number;
+  duration: number;
 };
 
 type SceneLayout = {
@@ -74,16 +86,9 @@ class SummaryScene extends BaseResponsiveScene {
 
   private nextBallId = 1;
 
-  private cat: CatAgent = {
-    gx: 0,
-    gy: 0,
-    x: 0,
-    y: 0,
-    carryValue: null,
-    dirX: 1,
-    dirY: 0,
-    stepCooldown: 0,
-  };
+  private cats: CatAgent[] = [];
+
+  private mergeEffects: MergeEffect[] = [];
 
   /**
    * Codex: クォータービュー猫ボールマージゲームを初期化する。
@@ -117,17 +122,7 @@ class SummaryScene extends BaseResponsiveScene {
     }).setOrigin(0.5, 0);
 
     this.seedInitialTwos();
-    const catStart = this.gridToScreen(2, 2);
-    this.cat = {
-      gx: 2,
-      gy: 2,
-      x: catStart.x,
-      y: catStart.y,
-      carryValue: null,
-      dirX: 1,
-      dirY: 0,
-      stepCooldown: 0,
-    };
+    this.cats = this.createCats();
 
     this.input.on('pointerdown', () => {
       this.spawnTapBall();
@@ -143,7 +138,8 @@ class SummaryScene extends BaseResponsiveScene {
     const dt = Math.min(0.05, delta / 1000);
     this.updateRollingTwos(dt);
     this.updateFallingBalls(dt);
-    this.updateCat(dt);
+    this.updateCats(dt);
+    this.updateMergeEffects(dt);
     this.drawScene();
   }
 
@@ -174,9 +170,13 @@ class SummaryScene extends BaseResponsiveScene {
     this.titleText.setPosition(layout.width * 0.5, 16 * layout.uiScale).setFontSize(31 * layout.uiScale);
     this.infoText.setPosition(layout.width * 0.5, 102 * layout.uiScale).setFontSize(20 * layout.uiScale);
 
-    const catPos = this.gridToScreen(this.cat.gx, this.cat.gy);
-    this.cat.x = catPos.x;
-    this.cat.y = catPos.y;
+    this.cats.forEach((cat) => {
+      const catPos = this.gridToScreen(cat.gx, cat.gy);
+      cat.x = catPos.x;
+      cat.y = catPos.y;
+      cat.targetGx = cat.gx;
+      cat.targetGy = cat.gy;
+    });
 
     this.drawScene();
   }
@@ -239,13 +239,13 @@ class SummaryScene extends BaseResponsiveScene {
     }
 
     const mover = Phaser.Utils.Array.GetRandom(twos);
-    if (this.cat.carryValue === null && this.cat.gx === mover.gx && this.cat.gy === mover.gy) {
+    if (this.cats.some((cat) => cat.carryValue === null && cat.gx === mover.gx && cat.gy === mover.gy)) {
       return;
     }
 
     const neighbors = this.getNeighborCells(mover.gx, mover.gy).filter((cell) => (
       !this.findBallAt(cell.gx, cell.gy)
-      && !(this.cat.gx === cell.gx && this.cat.gy === cell.gy)
+      && !this.isCatOnCell(cell.gx, cell.gy)
     ));
 
     if (neighbors.length === 0) {
@@ -283,44 +283,59 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 猫は空荷時に任意ボールへ、積載時は同値ボールへ向かう。
+   * Codex: 3匹の猫それぞれに行動決定と補間移動を適用する。
    */
-  private updateCat(dt: number): void {
-    this.cat.stepCooldown = Math.max(0, this.cat.stepCooldown - dt);
-    if (this.cat.stepCooldown > 0) {
-      return;
-    }
+  private updateCats(dt: number): void {
+    this.cats.forEach((cat) => {
+      const targetPos = this.gridToScreen(cat.targetGx, cat.targetGy);
+      const dx = targetPos.x - cat.x;
+      const dy = targetPos.y - cat.y;
+      const distance = Math.hypot(dx, dy);
+      const maxMove = cat.speed * dt;
 
-    const next = this.chooseNextCatStep();
-    if (!next) {
-      this.cat.stepCooldown = 0.12;
-      return;
-    }
+      if (distance > 0.001) {
+        const ratio = Math.min(1, maxMove / distance);
+        cat.x += dx * ratio;
+        cat.y += dy * ratio;
+        return;
+      }
 
-    this.cat.dirX = Phaser.Math.Clamp(next.gx - this.cat.gx, -1, 1);
-    this.cat.dirY = Phaser.Math.Clamp(next.gy - this.cat.gy, -1, 1);
-    this.cat.gx = next.gx;
-    this.cat.gy = next.gy;
+      cat.x = targetPos.x;
+      cat.y = targetPos.y;
+      cat.gx = cat.targetGx;
+      cat.gy = cat.targetGy;
+      cat.stepCooldown = Math.max(0, cat.stepCooldown - dt);
+      if (cat.stepCooldown > 0) {
+        return;
+      }
 
-    const nextPos = this.gridToScreen(next.gx, next.gy);
-    this.cat.x = nextPos.x;
-    this.cat.y = nextPos.y;
+      this.resolveCatCellAction(cat);
 
-    this.resolveCatCellAction();
-    this.cat.stepCooldown = 0.18;
+      const next = this.chooseNextCatStep(cat);
+      if (!next) {
+        cat.stepCooldown = 0.12;
+        return;
+      }
+
+      cat.dirX = Phaser.Math.Clamp(next.gx - cat.gx, -1, 1);
+      cat.dirY = Phaser.Math.Clamp(next.gy - cat.gy, -1, 1);
+      cat.targetGx = next.gx;
+      cat.targetGy = next.gy;
+      cat.stepCooldown = 0.04;
+    });
   }
 
   /**
    * Codex: 侵入制約を守って猫の次セルを決める。
    */
-  private chooseNextCatStep(): { gx: number; gy: number } | null {
-    const goal = this.findCatGoal();
+  private chooseNextCatStep(cat: CatAgent): { gx: number; gy: number } | null {
+    const goal = this.findCatGoal(cat);
     if (!goal) {
       return null;
     }
 
-    const candidates = this.getNeighborCells(this.cat.gx, this.cat.gy)
-      .filter((cell) => this.canCatEnter(cell.gx, cell.gy));
+    const candidates = this.getNeighborCells(cat.gx, cat.gy)
+      .filter((cell) => this.canCatEnter(cat, cell.gx, cell.gy));
 
     if (candidates.length === 0) {
       return null;
@@ -338,68 +353,73 @@ class SummaryScene extends BaseResponsiveScene {
   /**
    * Codex: 空荷なら最寄りボール、積載中なら同値ボールを目標セルにする。
    */
-  private findCatGoal(): { gx: number; gy: number } | null {
-    if (this.cat.carryValue === null) {
-      const nearest = this.findNearestBall(this.cat.gx, this.cat.gy, () => true);
+  private findCatGoal(cat: CatAgent): { gx: number; gy: number } | null {
+    if (cat.carryValue === null) {
+      const nearest = this.findNearestBall(cat.gx, cat.gy, () => true);
       return nearest ? { gx: nearest.gx, gy: nearest.gy } : null;
     }
 
-    const same = this.findNearestBall(this.cat.gx, this.cat.gy, (ball) => (
-      ball.value === this.cat.carryValue && !(ball.gx === this.cat.gx && ball.gy === this.cat.gy)
+    const same = this.findNearestBall(cat.gx, cat.gy, (ball) => (
+      ball.value === cat.carryValue && !(ball.gx === cat.gx && ball.gy === cat.gy)
     ));
 
     if (same) {
       return { gx: same.gx, gy: same.gy };
     }
 
-    const empty = this.findNearestEmptyCell(this.cat.gx, this.cat.gy);
+    const empty = this.findNearestEmptyCell(cat.gx, cat.gy);
     return empty ? { gx: empty.gx, gy: empty.gy } : null;
   }
 
   /**
    * Codex: 猫が入ったセルで拾得・マージ・一時退避を処理する。
    */
-  private resolveCatCellAction(): void {
-    const ball = this.findBallAt(this.cat.gx, this.cat.gy);
+  private resolveCatCellAction(cat: CatAgent): void {
+    const ball = this.findBallAt(cat.gx, cat.gy);
     if (!ball) {
-      if (this.cat.carryValue !== null) {
+      if (cat.carryValue !== null) {
         this.balls.push({
           id: this.nextBallId++,
-          gx: this.cat.gx,
-          gy: this.cat.gy,
-          value: this.cat.carryValue,
+          gx: cat.gx,
+          gy: cat.gy,
+          value: cat.carryValue,
         });
-        this.cat.carryValue = null;
+        cat.carryValue = null;
       }
       return;
     }
 
-    if (this.cat.carryValue === null) {
-      this.cat.carryValue = ball.value;
+    if (cat.carryValue === null) {
+      cat.carryValue = ball.value;
       this.removeBallById(ball.id);
       return;
     }
 
-    if (this.cat.carryValue === ball.value) {
-      ball.value += this.cat.carryValue;
-      this.cat.carryValue = null;
+    if (cat.carryValue === ball.value) {
+      ball.value += cat.carryValue;
+      this.pushMergeEffect(cat.gx, cat.gy, ball.value);
+      cat.carryValue = null;
     }
   }
 
   /**
    * Codex: ボール占有セルの侵入可否を要件どおり判定する。
    */
-  private canCatEnter(gx: number, gy: number): boolean {
+  private canCatEnter(cat: CatAgent, gx: number, gy: number): boolean {
+    if (this.isCellTargetedByOtherCat(cat.id, gx, gy)) {
+      return false;
+    }
+
     const ball = this.findBallAt(gx, gy);
     if (!ball) {
       return true;
     }
 
-    if (this.cat.carryValue === null) {
+    if (cat.carryValue === null) {
       return true;
     }
 
-    return ball.value === this.cat.carryValue;
+    return ball.value === cat.carryValue;
   }
 
   /**
@@ -414,6 +434,7 @@ class SummaryScene extends BaseResponsiveScene {
 
     if (existing.value === value) {
       existing.value += value;
+      this.pushMergeEffect(gx, gy, existing.value);
       return;
     }
 
@@ -433,9 +454,13 @@ class SummaryScene extends BaseResponsiveScene {
     this.drawGrid();
     this.drawBalls();
     this.drawFallingBalls();
-    this.drawCat();
+    this.drawCats();
+    this.drawMergeEffects();
 
-    const mergeHint = this.cat.carryValue === null ? '空荷: 任意ボールセルに侵入可能' : `積載中 ${this.cat.carryValue}: 同値セルのみ侵入`;
+    const carrying = this.cats.filter((cat) => cat.carryValue !== null).length;
+    const mergeHint = carrying === 0
+      ? '3匹とも空荷: 任意ボールセルに侵入可能'
+      : `運搬中の猫 ${carrying}匹: 同値セルへ運搬して合体`;
     this.infoText.setText(`タップで2/4/8を落下。 同じ数字で合体。\n${mergeHint}`);
   }
 
@@ -496,32 +521,34 @@ class SummaryScene extends BaseResponsiveScene {
   /**
    * Codex: 猫と運搬中ボールを「◯🐈」風に前方表示で描画する。
    */
-  private drawCat(): void {
+  private drawCats(): void {
     const catFontPx = Math.round(34 * this.layout.uiScale);
-    this.transientTexts.push(this.add.text(this.cat.x, this.cat.y, '🐈', {
-      fontFamily: 'sans-serif',
-      fontSize: `${catFontPx}px`,
-    }).setOrigin(0.5, 0.74));
+    this.cats.forEach((cat) => {
+      this.transientTexts.push(this.add.text(cat.x, cat.y, '🐈', {
+        fontFamily: 'sans-serif',
+        fontSize: `${catFontPx}px`,
+      }).setOrigin(0.5, 0.74));
 
-    if (this.cat.carryValue === null) {
-      return;
-    }
+      if (cat.carryValue === null) {
+        return;
+      }
 
-    const frontX = this.cat.x + this.cat.dirX * this.layout.tileW * 0.22;
-    const frontY = this.cat.y + this.cat.dirY * this.layout.tileH * 0.22 - this.layout.tileH * 0.22;
-    const radius = this.layout.tileH * 0.27;
+      const frontX = cat.x + cat.dirX * this.layout.tileW * 0.22;
+      const frontY = cat.y + cat.dirY * this.layout.tileH * 0.22 - this.layout.tileH * 0.22;
+      const radius = this.layout.tileH * 0.27;
 
-    this.graphics.fillStyle(this.pickBallColor(this.cat.carryValue), 1);
-    this.graphics.fillCircle(frontX, frontY, radius);
-    this.graphics.lineStyle(2, 0x0f172a, 0.72);
-    this.graphics.strokeCircle(frontX, frontY, radius);
+      this.graphics.fillStyle(this.pickBallColor(cat.carryValue), 1);
+      this.graphics.fillCircle(frontX, frontY, radius);
+      this.graphics.lineStyle(2, 0x0f172a, 0.72);
+      this.graphics.strokeCircle(frontX, frontY, radius);
 
-    this.transientTexts.push(this.add.text(frontX, frontY, String(this.cat.carryValue), {
-      color: '#0f172a',
-      fontFamily: 'sans-serif',
-      fontStyle: 'bold',
-      fontSize: `${Math.round(this.layout.tileH * 0.35)}px`,
-    }).setOrigin(0.5));
+      this.transientTexts.push(this.add.text(frontX, frontY, String(cat.carryValue), {
+        color: '#0f172a',
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold',
+        fontSize: `${Math.round(this.layout.tileH * 0.35)}px`,
+      }).setOrigin(0.5));
+    });
   }
 
   /**
@@ -596,7 +623,7 @@ class SummaryScene extends BaseResponsiveScene {
 
     while (queue.length > 0) {
       const current = queue.shift()!;
-      if (!this.findBallAt(current.gx, current.gy) && !(this.cat.gx === current.gx && this.cat.gy === current.gy)) {
+      if (!this.findBallAt(current.gx, current.gy) && !this.isCatOnCell(current.gx, current.gy)) {
         return current;
       }
 
@@ -647,6 +674,101 @@ class SummaryScene extends BaseResponsiveScene {
   private clearTransientTexts(): void {
     this.transientTexts.forEach((text) => text.destroy());
     this.transientTexts = [];
+  }
+
+  /**
+   * Codex: 猫3匹の初期配置を作成する。
+   */
+  private createCats(): CatAgent[] {
+    const starts = [
+      { gx: 1, gy: 1, dirX: 1, dirY: 0 },
+      { gx: 2, gy: 3, dirX: 0, dirY: -1 },
+      { gx: 4, gy: 2, dirX: -1, dirY: 0 },
+    ];
+
+    return starts.map((start, index) => {
+      const p = this.gridToScreen(start.gx, start.gy);
+      return {
+        id: index + 1,
+        gx: start.gx,
+        gy: start.gy,
+        targetGx: start.gx,
+        targetGy: start.gy,
+        x: p.x,
+        y: p.y,
+        speed: Phaser.Math.FloatBetween(220, 280),
+        carryValue: null,
+        dirX: start.dirX,
+        dirY: start.dirY,
+        stepCooldown: 0,
+      };
+    });
+  }
+
+  /**
+   * Codex: セルに猫が存在するかを判定する。
+   */
+  private isCatOnCell(gx: number, gy: number): boolean {
+    return this.cats.some((cat) => cat.gx === gx && cat.gy === gy);
+  }
+
+  /**
+   * Codex: 他の猫が同じ目標セルを狙っていないか判定する。
+   */
+  private isCellTargetedByOtherCat(catId: number, gx: number, gy: number): boolean {
+    return this.cats.some((cat) => (
+      cat.id !== catId
+      && cat.targetGx === gx
+      && cat.targetGy === gy
+    ));
+  }
+
+  /**
+   * Codex: マージ演出を追加する。
+   */
+  private pushMergeEffect(gx: number, gy: number, value: number): void {
+    const p = this.gridToScreen(gx, gy);
+    this.mergeEffects.push({
+      x: p.x,
+      y: p.y - this.layout.tileH * 0.26,
+      value,
+      age: 0,
+      duration: 0.42,
+    });
+  }
+
+  /**
+   * Codex: マージ演出の寿命を更新する。
+   */
+  private updateMergeEffects(dt: number): void {
+    this.mergeEffects.forEach((effect) => {
+      effect.age += dt;
+    });
+    this.mergeEffects = this.mergeEffects.filter((effect) => effect.age < effect.duration);
+  }
+
+  /**
+   * Codex: マージ時のリングとテキスト演出を描画する。
+   */
+  private drawMergeEffects(): void {
+    this.mergeEffects.forEach((effect) => {
+      const t = effect.age / effect.duration;
+      const alpha = Phaser.Math.Clamp(1 - t, 0, 1);
+      const radius = this.layout.tileH * (0.34 + t * 0.82);
+      const sparkleY = effect.y - this.layout.tileH * 0.24 - t * this.layout.tileH * 0.32;
+
+      this.graphics.lineStyle(3, 0xfef08a, alpha * 0.95);
+      this.graphics.strokeCircle(effect.x, effect.y, radius);
+      this.graphics.lineStyle(2, 0xffffff, alpha * 0.75);
+      this.graphics.strokeCircle(effect.x, effect.y, radius * 0.65);
+
+      this.transientTexts.push(this.add.text(effect.x, sparkleY, `✨+${effect.value}`, {
+        color: '#fde68a',
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold',
+        fontSize: `${Math.round(this.layout.tileH * 0.34)}px`,
+      }).setOrigin(0.5).setAlpha(alpha));
+    });
   }
 }
 
