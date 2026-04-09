@@ -34,6 +34,7 @@ export default defineConfig({
         page20: resolve(__dirname, 'page20', 'index.html'),
         page21: resolve(__dirname, 'page21', 'index.html'),
         page22: resolve(__dirname, 'page22', 'index.html'),
+        page23: resolve(__dirname, 'page23', 'index.html'),
       },
     },
   },
