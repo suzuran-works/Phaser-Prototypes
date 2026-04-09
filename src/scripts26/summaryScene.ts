@@ -315,8 +315,20 @@ class SummaryScene extends BaseResponsiveScene {
       cat.dirY = Phaser.Math.Clamp(next.gy - cat.gy, -1, 1);
       cat.targetGx = next.gx;
       cat.targetGy = next.gy;
-      cat.stepCooldown = 0.12;
+      cat.stepCooldown = this.computeCatStepCooldown(cat, next.gx, next.gy);
     });
+  }
+
+  /**
+   * Codex: 連続移動時は待機を減らし、複数セルをまたぐ移動を許可する。
+   */
+  private computeCatStepCooldown(cat: CatAgent, nextGx: number, nextGy: number): number {
+    const axisMove = Math.abs(nextGx - cat.gx) + Math.abs(nextGy - cat.gy);
+    if (axisMove === 1) {
+      return 0;
+    }
+
+    return 0.04;
   }
 
   /**
@@ -520,11 +532,23 @@ class SummaryScene extends BaseResponsiveScene {
   private drawCats(): void {
     const catFontPx = Math.round(34 * this.layout.uiScale);
     this.cats.forEach((cat) => {
-      const catEmoji = cat.sleepTimer > 0 ? '😺💤' : '🐈';
+      const catEmoji = cat.sleepTimer > 0 ? '😺' : '🐈';
       this.transientTexts.push(this.add.text(cat.x, cat.y, catEmoji, {
         fontFamily: 'sans-serif',
         fontSize: `${catFontPx}px`,
       }).setOrigin(0.5, 0.74));
+
+      if (cat.sleepTimer > 0 && this.isSleepBubbleVisible(cat)) {
+        this.transientTexts.push(this.add.text(
+          cat.x,
+          cat.y - this.layout.tileH * 0.84,
+          '🫧',
+          {
+            fontFamily: 'sans-serif',
+            fontSize: `${Math.round(catFontPx * 0.78)}px`,
+          },
+        ).setOrigin(0.5));
+      }
 
       if (cat.carryValue === null || cat.sleepTimer > 0) {
         return;
@@ -848,6 +872,13 @@ class SummaryScene extends BaseResponsiveScene {
         fontSize: `${Math.round(this.layout.tileH * 0.34)}px`,
       }).setOrigin(0.5).setAlpha(alpha));
     });
+  }
+
+  /**
+   * Codex: 睡眠中の猫に対して1秒間隔で泡の点滅表示を切り替える。
+   */
+  private isSleepBubbleVisible(cat: CatAgent): boolean {
+    return Math.floor(cat.sleepTimer) % 2 === 0;
   }
 }
 
