@@ -35,6 +35,9 @@ type CatAgent = {
   stepCooldown: number;
   pathHistory: string[];
   forcedPause: number;
+  actionDuration: number;
+  sleepTimer: number;
+  sleepCooldown: number;
 };
 
 type MergeEffect = {
@@ -63,6 +66,8 @@ class SummaryScene extends BaseResponsiveScene {
   private readonly initialTwos = 9;
 
   private readonly tapChoices = [2, 4, 8];
+
+  private readonly catSleepDuration = 10;
 
   private layout: SceneLayout = {
     width: 1080,
@@ -256,6 +261,14 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private updateCats(dt: number): void {
     this.cats.forEach((cat) => {
+      if (cat.sleepTimer > 0) {
+        cat.sleepTimer = Math.max(0, cat.sleepTimer - dt);
+        if (cat.sleepTimer === 0) {
+          cat.actionDuration = 0;
+        }
+        return;
+      }
+
       const targetPos = this.gridToScreen(cat.targetGx, cat.targetGy);
       const dx = targetPos.x - cat.x;
       const dy = targetPos.y - cat.y;
@@ -276,6 +289,7 @@ class SummaryScene extends BaseResponsiveScene {
       cat.pathHistory = this.pushPathHistory(cat.pathHistory, cat.gx, cat.gy);
       cat.stepCooldown = Math.max(0, cat.stepCooldown - dt);
       cat.forcedPause = Math.max(0, cat.forcedPause - dt);
+      cat.sleepCooldown = Math.max(0, cat.sleepCooldown - dt);
       if (cat.stepCooldown > 0) {
         return;
       }
@@ -283,7 +297,13 @@ class SummaryScene extends BaseResponsiveScene {
         return;
       }
 
+      if (cat.sleepCooldown <= 0) {
+        this.startCatSleep(cat);
+        return;
+      }
+
       this.resolveCatCellAction(cat);
+      cat.actionDuration += dt;
 
       const next = this.chooseNextCatStep(cat);
       if (!next) {
@@ -335,8 +355,8 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private findCatGoal(cat: CatAgent): { gx: number; gy: number } | null {
     if (cat.carryValue === null) {
-      const nearest = this.findNearestBall(cat.gx, cat.gy, () => true);
-      return nearest ? { gx: nearest.gx, gy: nearest.gy } : null;
+      const target = this.findBallForSearch(cat);
+      return target ? { gx: target.gx, gy: target.gy } : null;
     }
 
     const same = this.findNearestBall(cat.gx, cat.gy, (ball) => (
@@ -412,12 +432,6 @@ class SummaryScene extends BaseResponsiveScene {
       return;
     }
 
-    if (existing.value === value) {
-      existing.value += value;
-      this.pushMergeEffect(gx, gy, existing.value);
-      return;
-    }
-
     const fallback = this.findNearestEmptyCell(gx, gy);
     if (fallback) {
       this.balls.push({ id: this.nextBallId++, gx: fallback.gx, gy: fallback.gy, value });
@@ -438,10 +452,12 @@ class SummaryScene extends BaseResponsiveScene {
     this.drawMergeEffects();
 
     const carrying = this.cats.filter((cat) => cat.carryValue !== null).length;
+    const sleeping = this.cats.filter((cat) => cat.sleepTimer > 0).length;
     const mergeHint = carrying === 0
       ? '3匹とも空荷: 任意ボールセルに侵入可能'
       : `運搬中の猫 ${carrying}匹: 同値セルへ運搬して合体`;
-    this.infoText.setText(`タップで2/4/8を落下。 同じ数字で合体。\n${mergeHint}`);
+    const sleepHint = sleeping > 0 ? `睡眠中 ${sleeping}匹: 約10秒で復帰` : '猫は疲れると約10秒眠る';
+    this.infoText.setText(`タップで2/4/8を空セルへ落下。 同じ数字で合体。\n${mergeHint} / ${sleepHint}`);
   }
 
   /**
@@ -504,12 +520,13 @@ class SummaryScene extends BaseResponsiveScene {
   private drawCats(): void {
     const catFontPx = Math.round(34 * this.layout.uiScale);
     this.cats.forEach((cat) => {
-      this.transientTexts.push(this.add.text(cat.x, cat.y, '🐈', {
+      const catEmoji = cat.sleepTimer > 0 ? '😺💤' : '🐈';
+      this.transientTexts.push(this.add.text(cat.x, cat.y, catEmoji, {
         fontFamily: 'sans-serif',
         fontSize: `${catFontPx}px`,
       }).setOrigin(0.5, 0.74));
 
-      if (cat.carryValue === null) {
+      if (cat.carryValue === null || cat.sleepTimer > 0) {
         return;
       }
 
@@ -683,7 +700,59 @@ class SummaryScene extends BaseResponsiveScene {
         stepCooldown: 0,
         pathHistory: [`${start.gx},${start.gy}`],
         forcedPause: 0,
+        actionDuration: 0,
+        sleepTimer: 0,
+        sleepCooldown: Phaser.Math.FloatBetween(18, 26),
       };
+    });
+  }
+
+  /**
+   * Codex: 空荷の猫が近場だけでなく遠方ボールも狙う探索目標を返す。
+   */
+  private findBallForSearch(cat: CatAgent): GridBall | null {
+    const allBalls = this.balls.slice();
+    if (allBalls.length === 0) {
+      return null;
+    }
+
+    const sorted = allBalls.sort((a, b) => {
+      const da = Math.abs(a.gx - cat.gx) + Math.abs(a.gy - cat.gy);
+      const db = Math.abs(b.gx - cat.gx) + Math.abs(b.gy - cat.gy);
+      return da - db;
+    });
+
+    if (sorted.length <= 2 || Phaser.Math.FloatBetween(0, 1) < 0.64) {
+      return sorted[0];
+    }
+
+    const midToFar = sorted.slice(Math.min(2, sorted.length - 1));
+    return Phaser.Utils.Array.GetRandom(midToFar);
+  }
+
+  /**
+   * Codex: 一定時間働いた猫を約10秒の睡眠状態へ遷移させる。
+   */
+  private startCatSleep(cat: CatAgent): void {
+    cat.sleepTimer = this.catSleepDuration + Phaser.Math.FloatBetween(-1, 1);
+    cat.sleepCooldown = Number.POSITIVE_INFINITY;
+    cat.stepCooldown = 0.35;
+    cat.forcedPause = 0;
+    cat.targetGx = cat.gx;
+    cat.targetGy = cat.gy;
+    cat.pathHistory = [`${cat.gx},${cat.gy}`];
+    if (cat.carryValue !== null && !this.findBallAt(cat.gx, cat.gy)) {
+      this.balls.push({
+        id: this.nextBallId++,
+        gx: cat.gx,
+        gy: cat.gy,
+        value: cat.carryValue,
+      });
+      cat.carryValue = null;
+    }
+    this.time.delayedCall(cat.sleepTimer * 1000, () => {
+      cat.sleepCooldown = Phaser.Math.FloatBetween(18, 26);
+      cat.actionDuration = 0;
     });
   }
 
