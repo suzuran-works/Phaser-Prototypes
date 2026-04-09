@@ -40,7 +40,7 @@ type TopLayout = {
   buttons: Array<{ x: number; y: number; href: string; radius: number; strokeWidth: number }>;
 };
 
-const PAGE_LINKS = ['./page00/', './page01/', './page02/', './page03/', './page04/', './page05/', './page06/', './page07/', './page08/', './page09/', './page10/', './page11/', './page12/', './page13/', './page14/', './page15/', './page16/', './page17/', './page18/', './page19/', './page20/', './page21/', './page22/', './page23/', './page24/'] as const;
+const PAGE_LINKS = ['./page00/', './page01/', './page02/', './page03/', './page04/', './page05/', './page06/', './page07/', './page08/', './page09/', './page10/', './page11/', './page12/', './page13/', './page14/', './page15/', './page16/', './page17/', './page18/', './page19/', './page20/', './page21/', './page22/', './page23/', './page24/', './page25/'] as const;
 
 class TopScene extends BaseResponsiveScene {
   public static readonly key = 'TopScene';
