@@ -52,7 +52,6 @@ type FoodEntity = {
   sprite: Phaser.GameObjects.Text;
   gridX: number;
   gridY: number;
-  freshness: number;
 };
 
 type Reel = {
@@ -89,7 +88,6 @@ class SummaryScene extends BaseResponsiveScene {
   private itemLayer!: Phaser.GameObjects.Container;
   private creatureLayer!: Phaser.GameObjects.Container;
   private uiLayer!: Phaser.GameObjects.Container;
-  private slotPanel!: Phaser.GameObjects.Rectangle;
   private spinButton!: Phaser.GameObjects.Rectangle;
   private spinLabel!: Phaser.GameObjects.Text;
   private reels: Reel[] = [];
@@ -101,7 +99,9 @@ class SummaryScene extends BaseResponsiveScene {
   private reelActiveStates: boolean[] = [false, false, false];
   private spinResults: EmojiDefinition[] = [];
   private spinning = false;
-  private spinAttemptCount = 0;
+  private currentJackpotChance = 0.2;
+  private readonly jackpotChanceStep = 0.12;
+  private readonly maxJackpotChance = 0.8;
   private tileSize = 38;
 
   /**
@@ -145,8 +145,6 @@ class SummaryScene extends BaseResponsiveScene {
     this.fieldLayer.add([this.tileLayer, this.itemLayer, this.creatureLayer]);
 
     this.uiLayer = this.add.container(0, 0);
-    this.slotPanel = this.add.rectangle(0, 0, 100, 100, 0x111827, 0.88).setOrigin(0.5, 0.5);
-    this.uiLayer.add(this.slotPanel);
 
     this.reels = Array.from({ length: REEL_COUNT }, () => {
       const frame = this.add.rectangle(0, 0, 100, 140, 0x1e293b, 0.95).setStrokeStyle(3, 0x94a3b8, 0.8);
@@ -213,19 +211,21 @@ class SummaryScene extends BaseResponsiveScene {
    * GPT-5.3-Codex: 画面サイズから上半分フィールドと下半分スロット領域を計算する。
    */
   protected computeLayout(width: number, height: number): QuarterLayout {
-    const fieldHeight = height * 0.5;
-    const tileSize = Math.max(24, Math.min(44, Math.floor(Math.min(width * 0.1, fieldHeight * 0.14))));
+    const compactViewport = width < 640 || height > width * 1.2;
+    const fieldHeight = height * (compactViewport ? 0.56 : 0.5);
+    const tileSize = Math.max(20, Math.min(compactViewport ? 34 : 44, Math.floor(Math.min(width * (compactViewport ? 0.082 : 0.1), fieldHeight * 0.13))));
+    const topReserve = Math.max(74, height * 0.12);
 
     return {
       width,
       height,
       titleY: Math.max(10, height * 0.014),
-      subtitleY: Math.max(56, height * 0.064),
+      subtitleY: Math.max(52, height * 0.062),
       fieldCenterX: width * 0.5,
-      fieldCenterY: fieldHeight * 0.63,
+      fieldCenterY: Math.max(topReserve + tileSize * 1.8, fieldHeight * 0.52),
       tileSize,
-      slotAreaY: height * 0.75,
-      slotAreaHeight: height * 0.5,
+      slotAreaY: height * (compactViewport ? 0.79 : 0.75),
+      slotAreaHeight: height * (compactViewport ? 0.42 : 0.5),
       slotCenterX: width * 0.5,
     };
   }
@@ -245,8 +245,6 @@ class SummaryScene extends BaseResponsiveScene {
 
     this.drawQuarterField(this.tileSize);
     this.refreshDroppedItems();
-
-    this.slotPanel.setPosition(layout.slotCenterX, layout.slotAreaY).setSize(layout.width * 0.95, layout.slotAreaHeight * 0.9);
 
     const reelGap = Math.max(72, Math.floor(layout.width * 0.13));
     this.reels.forEach((reel, index) => {
@@ -300,7 +298,6 @@ class SummaryScene extends BaseResponsiveScene {
       return;
     }
 
-    this.spinAttemptCount += 1;
     this.spinning = true;
     this.spinButton.disableInteractive().setAlpha(0.6);
     this.statusText.setText('スロット回転中...');
@@ -343,16 +340,22 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * GPT-5.3-Codex: 3回に1回は必ず揃うスロット結果を生成する。
+   * GPT-5.3-Codex: 現在の当選確率に基づきスロットの停止結果を生成する。
    */
   private generateSpinResults(): EmojiDefinition[] {
-    if (this.spinAttemptCount % 3 === 0) {
+    const shouldJackpot = Math.random() < this.currentJackpotChance;
+    if (shouldJackpot) {
       const matchedEmoji = Phaser.Utils.Array.GetRandom(EMOJI_POOL);
-      // GPT-5.3-Codex: 3回目は全リール同一にして確定で揃える。
       return Array.from({ length: REEL_COUNT }, () => matchedEmoji);
     }
 
-    return Array.from({ length: REEL_COUNT }, () => Phaser.Utils.Array.GetRandom(EMOJI_POOL));
+    const first = Phaser.Utils.Array.GetRandom(EMOJI_POOL);
+    const second = Phaser.Utils.Array.GetRandom(EMOJI_POOL);
+    const thirdPool = first.emoji === second.emoji
+      ? EMOJI_POOL.filter((entry) => entry.emoji !== first.emoji)
+      : EMOJI_POOL;
+    const third = Phaser.Utils.Array.GetRandom(thirdPool);
+    return [first, second, third];
   }
 
   /**
@@ -364,12 +367,15 @@ class SummaryScene extends BaseResponsiveScene {
 
     const jackpot = this.spinResults.every((entry) => entry.emoji === this.spinResults[0].emoji);
     if (!jackpot) {
-      this.statusText.setText('今回はハズレ。もう一度タップ！');
+      this.currentJackpotChance = Math.min(this.maxJackpotChance, this.currentJackpotChance + this.jackpotChanceStep);
+      const chanceText = Math.round(this.currentJackpotChance * 100);
+      this.statusText.setText(`今回はハズレ。次回当選率 ${chanceText}%`);
       return;
     }
 
+    this.currentJackpotChance = 0.2;
     const matched = this.spinResults[0];
-    this.statusText.setText(`🎉 ${matched.emoji} (${matched.label}) が揃った！`);
+    this.statusText.setText(`🎉 ${matched.emoji} (${matched.label}) が揃った！ 当選率リセット`);
     this.spawnMatchedEmoji(matched);
   }
 
@@ -466,7 +472,7 @@ class SummaryScene extends BaseResponsiveScene {
       fontSize: `${Math.max(20, Math.floor(this.tileSize * 0.8))}px`,
     }).setOrigin(0.5, 0.68);
     this.itemLayer.add(sprite);
-    this.foods.push({ emoji, sprite, gridX, gridY, freshness: 7 });
+    this.foods.push({ emoji, sprite, gridX, gridY });
     this.playFallInTween(sprite, iso.y + this.tileSize * 0.18);
 
     if (this.creatures.length === 0) {
@@ -527,12 +533,11 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * GPT-5.3-Codex: 生き物が近くの食べものを食べ、時間で鮮度を減らす。
+   * GPT-5.3-Codex: 生き物が近くの食べものを食べたときのみフィールドから除去する。
    */
-  private processFoodEating(deltaSec: number): void {
+  private processFoodEating(_: number): void {
     for (let i = this.foods.length - 1; i >= 0; i -= 1) {
       const food = this.foods[i];
-      food.freshness -= deltaSec;
 
       const eater = this.creatures.find((creature) => {
         if (Math.random() > INTERACTION_PROBABILITY) {
@@ -550,13 +555,7 @@ class SummaryScene extends BaseResponsiveScene {
         this.statusText.setText(`${eater.emoji} が ${food.emoji} を食べた！`);
         continue;
       }
-
-      if (food.freshness <= 0) {
-        food.sprite.destroy();
-        this.foods.splice(i, 1);
-      }
     }
-
   }
 
   /**
