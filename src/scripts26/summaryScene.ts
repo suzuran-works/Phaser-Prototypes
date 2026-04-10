@@ -569,11 +569,12 @@ class SummaryScene extends BaseResponsiveScene {
     const catFontPx = Math.round(34 * this.layout.uiScale);
     this.cats.forEach((cat) => {
       const renderY = cat.y + this.getCatWalkBob(cat);
-      const catEmoji = this.getCatFacingEmoji(cat);
-      this.transientTexts.push(this.add.text(cat.x, renderY, catEmoji, {
+      const catText = this.add.text(cat.x, renderY, '🐈', {
         fontFamily: 'sans-serif',
         fontSize: `${catFontPx}px`,
-      }).setOrigin(0.5, 0.74));
+      }).setOrigin(0.5, 0.74);
+      catText.setScale(this.getCatFacingScaleX(cat), 1);
+      this.transientTexts.push(catText);
 
       if (cat.sleepTimer > 0 && this.isSleepBubbleVisible(cat)) {
         this.transientTexts.push(this.add.text(
@@ -610,17 +611,15 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 猫の進行方向に応じて左右向きを見分けられる絵文字を返す。
+   * GPT-5.3-Codex: 進行方向の画面X成分から猫絵文字の左右反転スケールを返す。
    */
-  private getCatFacingEmoji(cat: CatAgent): string {
-    if (cat.dirX < 0) {
-      return '🐈⬅️';
-    }
-    if (cat.dirX > 0) {
-      return '➡️🐈';
+  private getCatFacingScaleX(cat: CatAgent): number {
+    const screenDirX = cat.dirX - cat.dirY;
+    if (screenDirX > 0) {
+      return -1;
     }
 
-    return '🐈';
+    return 1;
   }
 
   /**
