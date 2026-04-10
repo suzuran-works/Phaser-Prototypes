@@ -38,8 +38,9 @@ export default defineConfig({
         page24: resolve(__dirname, 'page24', 'index.html'),
         page25: resolve(__dirname, 'page25', 'index.html'),
         page26: resolve(__dirname, 'page26', 'index.html'),
-        // Codex: Page27 をビルド入力に追加して本番配信での 404 を防ぐ。
+        // Codex: Page27 / Page28 をビルド入力に追加して本番配信での 404 を防ぐ。
         page27: resolve(__dirname, 'page27', 'index.html'),
+        page28: resolve(__dirname, 'page28', 'index.html'),
       },
     },
   },
