@@ -375,19 +375,10 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 猫の気分で短い休憩を挟み、ずっと運搬し続けないようにする。
+   * Codex: 運搬中の停止を防ぐため、猫の任意休憩は発生させない。
    */
-  private shouldStartCatIdle(cat: CatAgent): boolean {
-    if (cat.carryValue === null) {
-      return false;
-    }
-    if (Phaser.Math.FloatBetween(0, 1) >= 0.18) {
-      return false;
-    }
-
-    cat.idleTimer = Phaser.Math.FloatBetween(0.8, 2.2);
-    cat.stepCooldown = cat.idleTimer;
-    return true;
+  private shouldStartCatIdle(_cat: CatAgent): boolean {
+    return false;
   }
 
   /**
@@ -578,7 +569,8 @@ class SummaryScene extends BaseResponsiveScene {
     const catFontPx = Math.round(34 * this.layout.uiScale);
     this.cats.forEach((cat) => {
       const renderY = cat.y + this.getCatWalkBob(cat);
-      this.transientTexts.push(this.add.text(cat.x, renderY, '🐈', {
+      const catEmoji = this.getCatFacingEmoji(cat);
+      this.transientTexts.push(this.add.text(cat.x, renderY, catEmoji, {
         fontFamily: 'sans-serif',
         fontSize: `${catFontPx}px`,
       }).setOrigin(0.5, 0.74));
@@ -615,6 +607,20 @@ class SummaryScene extends BaseResponsiveScene {
         fontSize: `${Math.round(this.layout.tileH * 0.35)}px`,
       }).setOrigin(0.5));
     });
+  }
+
+  /**
+   * Codex: 猫の進行方向に応じて左右向きを見分けられる絵文字を返す。
+   */
+  private getCatFacingEmoji(cat: CatAgent): string {
+    if (cat.dirX < 0) {
+      return '🐈⬅️';
+    }
+    if (cat.dirX > 0) {
+      return '➡️🐈';
+    }
+
+    return '🐈';
   }
 
   /**
