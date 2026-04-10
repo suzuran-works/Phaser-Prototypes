@@ -38,6 +38,8 @@ type CatAgent = {
   actionDuration: number;
   sleepTimer: number;
   sleepCooldown: number;
+  idleTimer: number;
+  walkCycle: number;
 };
 
 type MergeEffect = {
@@ -276,12 +278,14 @@ class SummaryScene extends BaseResponsiveScene {
       const maxMove = cat.speed * dt;
 
       if (distance > 0.001) {
+        cat.walkCycle += dt * 6;
         const ratio = Math.min(1, maxMove / distance);
         cat.x += dx * ratio;
         cat.y += dy * ratio;
         return;
       }
 
+      cat.walkCycle = 0;
       cat.x = targetPos.x;
       cat.y = targetPos.y;
       cat.gx = cat.targetGx;
@@ -296,9 +300,16 @@ class SummaryScene extends BaseResponsiveScene {
       if (cat.forcedPause > 0) {
         return;
       }
+      if (cat.idleTimer > 0) {
+        cat.idleTimer = Math.max(0, cat.idleTimer - dt);
+        return;
+      }
 
       if (cat.sleepCooldown <= 0) {
         this.startCatSleep(cat);
+        return;
+      }
+      if (this.shouldStartCatIdle(cat)) {
         return;
       }
 
@@ -340,7 +351,8 @@ class SummaryScene extends BaseResponsiveScene {
       return null;
     }
 
-    const candidates = this.getNeighborCells(cat.gx, cat.gy)
+    const moveSpan = cat.carryValue === null ? 1 : 3;
+    const candidates = this.getCatStepCandidates(cat, moveSpan)
       .filter((cell) => this.canCatEnter(cat, cell.gx, cell.gy));
 
     if (candidates.length === 0) {
@@ -360,6 +372,39 @@ class SummaryScene extends BaseResponsiveScene {
 
     cat.forcedPause = 0.36;
     return null;
+  }
+
+  /**
+   * Codex: 猫の気分で短い休憩を挟み、ずっと運搬し続けないようにする。
+   */
+  private shouldStartCatIdle(cat: CatAgent): boolean {
+    if (cat.carryValue === null) {
+      return false;
+    }
+    if (Phaser.Math.FloatBetween(0, 1) >= 0.18) {
+      return false;
+    }
+
+    cat.idleTimer = Phaser.Math.FloatBetween(0.8, 2.2);
+    cat.stepCooldown = cat.idleTimer;
+    return true;
+  }
+
+  /**
+   * Codex: 運搬中は複数セル先まで含めた移動候補を返す。
+   */
+  private getCatStepCandidates(cat: CatAgent, maxSpan: number): Array<{ gx: number; gy: number }> {
+    const candidates: Array<{ gx: number; gy: number }> = [];
+    for (let gy = 0; gy < this.gridSize; gy += 1) {
+      for (let gx = 0; gx < this.gridSize; gx += 1) {
+        const dist = Math.abs(gx - cat.gx) + Math.abs(gy - cat.gy);
+        if (dist === 0 || dist > maxSpan) {
+          continue;
+        }
+        candidates.push({ gx, gy });
+      }
+    }
+    return candidates;
   }
 
   /**
@@ -532,8 +577,8 @@ class SummaryScene extends BaseResponsiveScene {
   private drawCats(): void {
     const catFontPx = Math.round(34 * this.layout.uiScale);
     this.cats.forEach((cat) => {
-      const catEmoji = cat.sleepTimer > 0 ? '😺' : '🐈';
-      this.transientTexts.push(this.add.text(cat.x, cat.y, catEmoji, {
+      const renderY = cat.y + this.getCatWalkBob(cat);
+      this.transientTexts.push(this.add.text(cat.x, renderY, '🐈', {
         fontFamily: 'sans-serif',
         fontSize: `${catFontPx}px`,
       }).setOrigin(0.5, 0.74));
@@ -541,7 +586,7 @@ class SummaryScene extends BaseResponsiveScene {
       if (cat.sleepTimer > 0 && this.isSleepBubbleVisible(cat)) {
         this.transientTexts.push(this.add.text(
           cat.x,
-          cat.y - this.layout.tileH * 0.84,
+          renderY - this.layout.tileH * 0.84,
           '🫧',
           {
             fontFamily: 'sans-serif',
@@ -555,7 +600,7 @@ class SummaryScene extends BaseResponsiveScene {
       }
 
       const frontX = cat.x + cat.dirX * this.layout.tileW * 0.22;
-      const frontY = cat.y + cat.dirY * this.layout.tileH * 0.22 - this.layout.tileH * 0.22;
+      const frontY = renderY + cat.dirY * this.layout.tileH * 0.22 - this.layout.tileH * 0.22;
       const radius = this.layout.tileH * 0.27;
 
       this.graphics.fillStyle(this.pickBallColor(cat.carryValue), 1);
@@ -570,6 +615,18 @@ class SummaryScene extends BaseResponsiveScene {
         fontSize: `${Math.round(this.layout.tileH * 0.35)}px`,
       }).setOrigin(0.5));
     });
+  }
+
+  /**
+   * Codex: 移動中の猫に上下の揺れを加えて歩行感を出す。
+   */
+  private getCatWalkBob(cat: CatAgent): number {
+    const moving = cat.gx !== cat.targetGx || cat.gy !== cat.targetGy;
+    if (!moving) {
+      return 0;
+    }
+
+    return Math.sin(cat.walkCycle) * this.layout.tileH * 0.1;
   }
 
   /**
@@ -717,7 +774,7 @@ class SummaryScene extends BaseResponsiveScene {
         targetGy: start.gy,
         x: p.x,
         y: p.y,
-        speed: Phaser.Math.FloatBetween(132, 164),
+        speed: Phaser.Math.FloatBetween(92, 122),
         carryValue: null,
         dirX: start.dirX,
         dirY: start.dirY,
@@ -727,6 +784,8 @@ class SummaryScene extends BaseResponsiveScene {
         actionDuration: 0,
         sleepTimer: 0,
         sleepCooldown: Phaser.Math.FloatBetween(18, 26),
+        idleTimer: 0,
+        walkCycle: Phaser.Math.FloatBetween(0, Math.PI * 2),
       };
     });
   }
