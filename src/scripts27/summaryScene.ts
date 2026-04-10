@@ -33,7 +33,7 @@ class SummaryScene extends BaseResponsiveScene {
 
   private readonly ballEmojis = ['⚽️', '🏀', '🏐', '🎾', '🏈', '⚾️'];
 
-  private readonly spawnInterval = 0.9;
+  private readonly autoMoveInterval = 0.95;
 
   private layout: SceneLayout = {
     width: 1080,
@@ -72,6 +72,10 @@ class SummaryScene extends BaseResponsiveScene {
   private sealGX = 3;
 
   private sealGY = 6;
+
+  private targetSealGX = 3;
+
+  private targetSealGY = 6;
 
   /**
    * Codex: ボールを拾うアザラシゲームのシーンを初期化する。
@@ -116,12 +120,8 @@ class SummaryScene extends BaseResponsiveScene {
       fontSize: '82px',
     }).setOrigin(0.5, 0.62);
 
-    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      this.moveSealToPointer(pointer.x, pointer.y);
-    });
-
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      this.moveSealToPointer(pointer.x, pointer.y);
+      this.spawnBallAtPointer(pointer.x, pointer.y);
     });
 
     this.bindResponsiveLayout();
@@ -133,11 +133,7 @@ class SummaryScene extends BaseResponsiveScene {
   public update(_time: number, delta: number): void {
     const dt = Math.min(0.05, delta / 1000);
 
-    this.spawnTimer += dt;
-    if (this.spawnTimer >= this.spawnInterval) {
-      this.spawnTimer -= this.spawnInterval;
-      this.spawnBall();
-    }
+    this.updateSealAutonomousMove(dt);
 
     this.updateFallingBalls(dt);
     this.collectBallsNearSeal();
@@ -210,20 +206,28 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 新しいボールをランダム座標の上空へ生成する。
+   * GPT-5.3-Codex: タップ位置に対応するグリッドの上空へボールを生成する。
    */
-  private spawnBall(): void {
+  private spawnBallAtPointer(screenX: number, screenY: number): void {
+    const cell = this.screenToGrid(screenX, screenY);
+    this.spawnBall(cell.gx, cell.gy);
+  }
+
+  /**
+   * GPT-5.3-Codex: 指定グリッドの上空に新しいボールを生成する。
+   */
+  private spawnBall(gx: number, gy: number): void {
     const ball: FallingBall = {
       id: this.nextBallId++,
       emoji: Phaser.Utils.Array.GetRandom(this.ballEmojis),
-      gx: Phaser.Math.Between(0, this.gridSize - 1),
-      gy: Phaser.Math.Between(0, this.gridSize - 1),
+      gx,
+      gy,
       z: Phaser.Math.FloatBetween(380, 540),
       vz: Phaser.Math.FloatBetween(190, 250),
       settled: false,
       sprite: this.add.text(0, 0, '', {
         fontFamily: 'sans-serif',
-        fontSize: `${Math.round(50 * this.layout.uiScale)}px`,
+        fontSize: `${Math.round(25 * this.layout.uiScale)}px`,
       }).setOrigin(0.5),
     };
 
@@ -291,6 +295,36 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
+   * GPT-5.3-Codex: 一定間隔で次の目的地を選び、アザラシを自律移動させる。
+   */
+  private updateSealAutonomousMove(dt: number): void {
+    this.spawnTimer += dt;
+    if (this.spawnTimer >= this.autoMoveInterval) {
+      this.spawnTimer = 0;
+      this.pickNextSealTarget();
+    }
+
+    if (this.sealGX === this.targetSealGX && this.sealGY === this.targetSealGY) {
+      return;
+    }
+
+    const nextGX = this.sealGX + Math.sign(this.targetSealGX - this.sealGX);
+    const nextGY = this.sealGY + Math.sign(this.targetSealGY - this.sealGY);
+    this.sealGX = Phaser.Math.Clamp(nextGX, 0, this.gridSize - 1);
+    this.sealGY = Phaser.Math.Clamp(nextGY, 0, this.gridSize - 1);
+    this.placeSeal();
+    this.syncStackVisuals();
+  }
+
+  /**
+   * GPT-5.3-Codex: 盤面内から次の自律移動先グリッドをランダムに決める。
+   */
+  private pickNextSealTarget(): void {
+    this.targetSealGX = Phaser.Math.Between(0, this.gridSize - 1);
+    this.targetSealGY = Phaser.Math.Between(0, this.gridSize - 1);
+  }
+
+  /**
    * Codex: グリッド座標と高さをクォータービューのスクリーン座標へ変換する。
    */
   private gridToScreen(gx: number, gy: number, z: number): { x: number; y: number } {
@@ -301,17 +335,17 @@ class SummaryScene extends BaseResponsiveScene {
   }
 
   /**
-   * Codex: 画面座標を最寄りのグリッドへ逆変換してアザラシ位置を更新する。
+   * GPT-5.3-Codex: 画面座標を最寄りのグリッドへ逆変換する。
    */
-  private moveSealToPointer(screenX: number, screenY: number): void {
+  private screenToGrid(screenX: number, screenY: number): { gx: number; gy: number } {
     const localX = (screenX - this.layout.fieldCenterX) / (this.layout.tileW * 0.5);
     const localY = (screenY - this.layout.fieldTopY) / (this.layout.tileH * 0.5);
     const gx = Math.round((localX + localY) * 0.5);
     const gy = Math.round((localY - localX) * 0.5);
-    this.sealGX = Phaser.Math.Clamp(gx, 0, this.gridSize - 1);
-    this.sealGY = Phaser.Math.Clamp(gy, 0, this.gridSize - 1);
-    this.placeSeal();
-    this.syncStackVisuals();
+    return {
+      gx: Phaser.Math.Clamp(gx, 0, this.gridSize - 1),
+      gy: Phaser.Math.Clamp(gy, 0, this.gridSize - 1),
+    };
   }
 
   /**
@@ -328,7 +362,7 @@ class SummaryScene extends BaseResponsiveScene {
    */
   private repositionBalls(): void {
     this.balls.forEach((ball) => {
-      ball.sprite.setFontSize(50 * this.layout.uiScale);
+      ball.sprite.setFontSize(25 * this.layout.uiScale);
       this.syncBallSprite(ball);
     });
   }
@@ -354,20 +388,18 @@ class SummaryScene extends BaseResponsiveScene {
     while (this.stackTexts.length < this.carryCount) {
       const stackText = this.add.text(0, 0, '⚽️', {
         fontFamily: 'sans-serif',
-        fontSize: `${Math.round(32 * this.layout.uiScale)}px`,
+        fontSize: `${Math.round(25 * this.layout.uiScale)}px`,
       }).setOrigin(0.5, 0.5);
       this.stackTexts.push(stackText);
     }
 
     const sealPos = this.gridToScreen(this.sealGX, this.sealGY, 0);
     this.stackTexts.forEach((text, index) => {
-      const zigzag = index % 2 === 0 ? -1 : 1;
-      const level = Math.floor(index / 2);
       text
-        .setFontSize(32 * this.layout.uiScale)
+        .setFontSize(25 * this.layout.uiScale)
         .setPosition(
-          sealPos.x + zigzag * (8 + level * 2) * this.layout.uiScale,
-          sealPos.y - (36 + index * 14) * this.layout.uiScale,
+          sealPos.x,
+          sealPos.y - (32 + index * 13) * this.layout.uiScale,
         )
         .setDepth(this.sealText.depth + 10 + index);
     });
@@ -377,7 +409,7 @@ class SummaryScene extends BaseResponsiveScene {
    * Codex: タイトル下メッセージとスコア表示を最新状態へ更新する。
    */
   private syncUiTexts(): void {
-    this.infoText.setText('盤面をドラッグ/タップして🦭を移動\n落ちたボールを拾って10個まで積み上げよう');
+    this.infoText.setText('🦭は自律移動します\nタップした場所にボールを落として積み上げを眺めよう');
     this.scoreText.setText(`所持: ${this.carryCount}/${this.maxCarry}  累計回収: ${this.pickedCount}  地面: ${this.settledCount}`);
   }
 }
