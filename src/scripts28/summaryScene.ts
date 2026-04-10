@@ -9,14 +9,22 @@ type RockState = {
   id: number;
   tile: Point;
   durability: number;
+  isBroken: boolean;
   sprite: Phaser.GameObjects.Text | null;
 };
 
 type GemState = {
   id: number;
-  worldX: number;
-  worldY: number;
+  tile: Point;
+  offsetX: number;
+  offsetY: number;
   sprite: Phaser.GameObjects.Text;
+};
+
+type MonkeyState = {
+  id: number;
+  sprite: Phaser.GameObjects.Text;
+  targetRockId: number | null;
 };
 
 type QuarterViewLayout = {
@@ -31,9 +39,10 @@ const FIELD_RADIUS = 4;
 const ROCK_COUNT = 10;
 const ROCK_INITIAL_DURABILITY = 6;
 const MINE_INTERVAL_MS = 520;
-const MOVE_INTERVAL_MS = 1300;
+const MOVE_INTERVAL_MS = 900;
 const GEM_DROP_RATE = 0.3;
 const GEM_BURST_HEIGHT = 26;
+const MONKEY_COUNT = 3;
 
 class SummaryScene extends BaseResponsiveScene {
   public static readonly key = 'Scripts28SummaryScene';
@@ -46,9 +55,7 @@ class SummaryScene extends BaseResponsiveScene {
 
   private hudScore!: Phaser.GameObjects.Text;
 
-  private monkey!: Phaser.GameObjects.Text;
-
-  private monkeyTarget: RockState | null = null;
+  private monkeys: MonkeyState[] = [];
 
   private rocks: RockState[] = [];
 
@@ -71,16 +78,17 @@ class SummaryScene extends BaseResponsiveScene {
 
     this.worldLayer = this.add.container(0, 0);
     this.hudTitle = this.add.text(0, 0, `${TITLE} | ${SUBTITLE}`, { fontSize: '14px', color: '#e5e7eb' });
-    this.hudScore = this.add.text(0, 0, '回収した💎: 0', { fontSize: '22px', color: '#fef08a', fontStyle: 'bold' });
-    this.monkey = this.add.text(0, 0, '🐒⛏️', { fontSize: '34px' }).setOrigin(0.5, 1);
-
+    this.hudScore = this.add.text(0, 0, '散乱した💎: 0', { fontSize: '22px', color: '#fef08a', fontStyle: 'bold' });
+    this.createMonkeys();
     this.createRocks();
+    this.input.on('pointerdown', this.handleScreenTap, this);
     this.bindResponsiveLayout();
     this.startSimulation();
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.miningEvent?.destroy();
       this.moveEvent?.destroy();
+      this.input.off('pointerdown', this.handleScreenTap, this);
     });
   }
 
@@ -130,27 +138,43 @@ class SummaryScene extends BaseResponsiveScene {
         id: this.rocks.length,
         tile,
         durability: ROCK_INITIAL_DURABILITY,
+        isBroken: false,
         sprite: this.add.text(0, 0, '🪨', { fontSize: '32px' }).setOrigin(0.5, 1),
       });
     }
   }
 
   /**
+   * Codex: 猿を3匹生成して個別に採掘対象を持てるようにする。
+   */
+  private createMonkeys(): void {
+    this.monkeys = Array.from({ length: MONKEY_COUNT }, (_, index) => ({
+      id: index,
+      sprite: this.add.text(0, 0, '🐒⛏️', { fontSize: '34px' }).setOrigin(0.5, 1),
+      targetRockId: null,
+    }));
+  }
+
+  /**
    * Codex: 観賞ゲームの自動移動と採掘ループを開始する。
    */
   private startSimulation(): void {
-    this.selectNextTarget();
+    this.monkeys.forEach((monkey) => {
+      this.selectNextTarget(monkey);
+    });
 
     this.moveEvent = this.time.addEvent({
       delay: MOVE_INTERVAL_MS,
       loop: true,
       callback: () => {
-        if (!this.monkeyTarget) {
-          this.selectNextTarget();
-        }
-        if (this.monkeyTarget) {
-          this.moveMonkeyToRock(this.monkeyTarget);
-        }
+        this.monkeys.forEach((monkey) => {
+          const target = this.getMonkeyTarget(monkey);
+          if (!target) {
+            this.selectNextTarget(monkey);
+            return;
+          }
+          this.moveMonkeyToRock(monkey, target);
+        });
       },
     });
 
@@ -158,10 +182,13 @@ class SummaryScene extends BaseResponsiveScene {
       delay: MINE_INTERVAL_MS,
       loop: true,
       callback: () => {
-        if (!this.monkeyTarget) {
-          return;
-        }
-        this.mineRock(this.monkeyTarget);
+        this.monkeys.forEach((monkey) => {
+          const target = this.getMonkeyTarget(monkey);
+          if (!target) {
+            return;
+          }
+          this.mineRock(monkey, target);
+        });
       },
     });
   }
@@ -169,26 +196,33 @@ class SummaryScene extends BaseResponsiveScene {
   /**
    * Codex: 次に採掘する岩をランダムに選択する。
    */
-  private selectNextTarget(): void {
-    if (this.rocks.length === 0) {
+  private selectNextTarget(monkey: MonkeyState): void {
+    const candidates = this.rocks.filter((rock) => !rock.isBroken);
+    if (candidates.length === 0) {
+      monkey.targetRockId = null;
       return;
     }
 
-    const index = Phaser.Math.Between(0, this.rocks.length - 1);
-    this.monkeyTarget = this.rocks[index] ?? null;
-    if (this.monkeyTarget) {
-      this.moveMonkeyToRock(this.monkeyTarget);
+    const index = Phaser.Math.Between(0, candidates.length - 1);
+    const rock = candidates[index] ?? null;
+    monkey.targetRockId = rock?.id ?? null;
+    if (rock) {
+      this.moveMonkeyToRock(monkey, rock);
     }
   }
 
   /**
    * Codex: 猿を対象の岩タイル位置へ滑らかに移動させる。
    */
-  private moveMonkeyToRock(rock: RockState): void {
+  private moveMonkeyToRock(monkey: MonkeyState, rock: RockState): void {
+    if (rock.isBroken) {
+      monkey.targetRockId = null;
+      return;
+    }
     const position = this.tileToScreen(rock.tile.x, rock.tile.y);
 
     this.tweens.add({
-      targets: this.monkey,
+      targets: monkey.sprite,
       x: position.x,
       y: position.y,
       duration: 420,
@@ -199,7 +233,11 @@ class SummaryScene extends BaseResponsiveScene {
   /**
    * Codex: 岩を叩いて耐久値を減らし、一定確率で宝石をドロップする。
    */
-  private mineRock(rock: RockState): void {
+  private mineRock(monkey: MonkeyState, rock: RockState): void {
+    if (rock.isBroken) {
+      monkey.targetRockId = null;
+      return;
+    }
     rock.durability -= 1;
 
     if (rock.sprite) {
@@ -220,74 +258,79 @@ class SummaryScene extends BaseResponsiveScene {
       return;
     }
 
-    this.respawnRock(rock);
-    this.selectNextTarget();
+    rock.isBroken = true;
+    rock.sprite?.setVisible(false);
+    monkey.targetRockId = null;
+    this.selectNextTarget(monkey);
   }
 
   /**
-   * Codex: 採掘済みの岩を新しい座標へ再配置してループを継続する。
+   * Codex: 採掘済みの岩を新しい座標へ再配置して再度採掘可能にする。
    */
-  private respawnRock(rock: RockState): void {
-    rock.tile = this.pickRandomTile();
+  private respawnRock(rock: RockState, tile?: Point): void {
+    rock.tile = tile ?? this.pickRandomTile();
     rock.durability = ROCK_INITIAL_DURABILITY;
+    rock.isBroken = false;
 
     if (rock.sprite) {
       const position = this.tileToScreen(rock.tile.x, rock.tile.y);
+      rock.sprite.setVisible(true);
       rock.sprite.setPosition(position.x, position.y);
     }
   }
 
   /**
-   * Codex: 宝石を地面から飛び出す演出付きで生成し、タップ回収を有効化する。
+   * Codex: 宝石を地面から飛び出させ、転がった位置に残るよう配置する。
    */
   private spawnGem(tileX: number, tileY: number): void {
     const position = this.tileToScreen(tileX, tileY);
-    const gemSprite = this.add.text(position.x, position.y, '💎', { fontSize: '30px' })
-      .setOrigin(0.5, 1)
-      .setInteractive({ useHandCursor: true });
+    const offsetX = Phaser.Math.Between(-24, 24);
+    const offsetY = Phaser.Math.Between(-10, 12);
+    const gemSprite = this.add.text(position.x, position.y, '💎', { fontSize: '30px' }).setOrigin(0.5, 1);
 
     const gem: GemState = {
       id: this.gemSequence,
-      worldX: tileX,
-      worldY: tileY,
+      tile: { x: tileX, y: tileY },
+      offsetX,
+      offsetY,
       sprite: gemSprite,
     };
     this.gemSequence += 1;
 
-    gemSprite.on('pointerdown', () => {
-      this.collectGem(gem.id);
-    });
-
     this.gems.push(gem);
+    this.score += 1;
+    this.hudScore.setText(`散乱した💎: ${this.score}`);
 
     this.tweens.add({
       targets: gemSprite,
-      y: gemSprite.y - GEM_BURST_HEIGHT,
-      alpha: { from: 0, to: 1 },
-      yoyo: true,
-      duration: 260,
-      onYoyo: () => {
-        gemSprite.setAlpha(1);
-      },
+      x: gemSprite.x + offsetX,
+      y: gemSprite.y - GEM_BURST_HEIGHT + offsetY,
+      alpha: { from: 0.9, to: 1 },
+      ease: 'Sine.easeOut',
+      duration: 280,
     });
 
     this.sortWorldDepth();
   }
 
   /**
-   * Codex: タップされた宝石を回収してスコアを更新する。
+   * Codex: 画面タップで壊れた岩を1個だけランダム位置にリスポーンする。
    */
-  private collectGem(gemId: number): void {
-    const gemIndex = this.gems.findIndex((item) => item.id === gemId);
-    if (gemIndex < 0) {
+  private handleScreenTap(pointer: Phaser.Input.Pointer): void {
+    const brokenRocks = this.rocks.filter((rock) => rock.isBroken);
+    if (brokenRocks.length === 0) {
       return;
     }
 
-    const [gem] = this.gems.splice(gemIndex, 1);
-    gem.sprite.destroy();
-
-    this.score += 1;
-    this.hudScore.setText(`回収した💎: ${this.score}`);
+    const targetRock = brokenRocks[Phaser.Math.Between(0, brokenRocks.length - 1)];
+    const tile = this.screenToTile(pointer.x, pointer.y);
+    this.respawnRock(targetRock, tile);
+    this.monkeys.forEach((monkey) => {
+      if (!this.getMonkeyTarget(monkey)) {
+        this.selectNextTarget(monkey);
+      }
+    });
+    this.sortWorldDepth();
   }
 
   /**
@@ -332,14 +375,17 @@ class SummaryScene extends BaseResponsiveScene {
     });
 
     this.gems.forEach((gem) => {
-      const p = this.tileToScreen(gem.worldX, gem.worldY);
-      gem.sprite.setPosition(p.x, p.y - 8);
+      const p = this.tileToScreen(gem.tile.x, gem.tile.y);
+      gem.sprite.setPosition(p.x + gem.offsetX, p.y - 8 + gem.offsetY);
     });
 
-    if (this.monkeyTarget) {
-      const p = this.tileToScreen(this.monkeyTarget.tile.x, this.monkeyTarget.tile.y);
-      this.monkey.setPosition(p.x, p.y);
-    }
+    this.monkeys.forEach((monkey) => {
+      const target = this.getMonkeyTarget(monkey);
+      if (target) {
+        const p = this.tileToScreen(target.tile.x, target.tile.y);
+        monkey.sprite.setPosition(p.x, p.y);
+      }
+    });
 
     this.sortWorldDepth();
   }
@@ -358,7 +404,9 @@ class SummaryScene extends BaseResponsiveScene {
       gem.sprite.setDepth(gem.sprite.y + 2);
     });
 
-    this.monkey.setDepth(this.monkey.y + 4);
+    this.monkeys.forEach((monkey, index) => {
+      monkey.sprite.setDepth(monkey.sprite.y + 4 + index * 0.1);
+    });
   }
 
   /**
@@ -378,6 +426,32 @@ class SummaryScene extends BaseResponsiveScene {
     return {
       x: Phaser.Math.Between(-FIELD_RADIUS + 1, FIELD_RADIUS - 1),
       y: Phaser.Math.Between(-FIELD_RADIUS + 1, FIELD_RADIUS - 1),
+    };
+  }
+
+  /**
+   * Codex: 指定した猿が現在追跡している岩を取得する。
+   */
+  private getMonkeyTarget(monkey: MonkeyState): RockState | null {
+    if (monkey.targetRockId === null) {
+      return null;
+    }
+    return this.rocks.find((rock) => rock.id === monkey.targetRockId) ?? null;
+  }
+
+  /**
+   * Codex: スクリーン座標を近傍のタイル座標へ変換する。
+   */
+  private screenToTile(screenX: number, screenY: number): Point {
+    const dx = screenX - this.layout.centerX;
+    const dy = screenY - this.layout.baseY;
+    const halfW = this.layout.tileWidth / 2;
+    const halfH = this.layout.tileHeight / 2;
+    const rawX = (dx / halfW + dy / halfH) / 2;
+    const rawY = (dy / halfH - dx / halfW) / 2;
+    return {
+      x: Phaser.Math.Clamp(Math.round(rawX), -FIELD_RADIUS + 1, FIELD_RADIUS - 1),
+      y: Phaser.Math.Clamp(Math.round(rawY), -FIELD_RADIUS + 1, FIELD_RADIUS - 1),
     };
   }
 }
