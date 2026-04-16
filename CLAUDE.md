@@ -9,14 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## コマンド
 
 ```bash
-npm install          # 依存関係のインストール
-npm run dev          # 開発サーバー起動（http://localhost:5000）
-npm run build        # TypeScript コンパイル + Vite プロダクションビルド
-npm run preview      # プロダクションビルドのローカルプレビュー
-npm run create:page  # 新規ページ雛形生成（例: npm run create:page -- --page 30 --subtitle "説明"）
+# 新規ページ雛形生成
+npm run create:page -- --page 30 --subtitle "説明"
 ```
 
-ビルドは `tsc && vite build` の順に実行される。TypeScript エラーがあるとビルドが止まる。テストスイートはない。
+ビルドは `tsc && vite build` の順。TypeScript エラーがあるとビルドが止まる。テストスイートはない。
 
 ---
 
