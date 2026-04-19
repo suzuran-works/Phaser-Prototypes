@@ -130,17 +130,28 @@ class HotSpringScene extends Phaser.Scene {
   private rabbitId = 0;
   private coinId = 0;
 
+  // Claude Code: ドラッグ判定用の状態変数
+  private dragStartX = 0;
+  private dragStartY = 0;
+  private cameraStartScrollX = 0;
+  private cameraStartScrollY = 0;
+  private hasDragged = false;
+  private isPointerDown = false;
+
   constructor() {
     super({ key: 'HotSpringScene' });
   }
 
   create(): void {
     this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
+    // Claude Code: ワールド全体をスクロール範囲に設定し、中心をフィールド中央に合わせる
+    this.cameras.main.setBounds(0, 0, 1080, 1080);
+    this.cameras.main.centerOn(SPRING_SX, SPRING_SY);
     this.drawGround();
     this.drawSpring();
     this.addDecorations();
     this.setupUI();
-    this.input.on('pointerdown', this.onPointerDown, this);
+    this.setupDragCamera();
   }
 
   update(_t: number, dt: number): void {
@@ -228,24 +239,68 @@ class HotSpringScene extends Phaser.Scene {
   }
 
   /**
-   * Claude Code: タイトル・説明・スコアのUIを構築する
+   * Claude Code: タイトル・説明・スコアのUIをビューポートに固定して構築する
    */
   private setupUI(): void {
-    this.add.text(540, 52, '🐇 温泉うさぎ 🐇', {
+    // Claude Code: scrollFactor(0) でカメラ移動に関わらず画面固定表示にする
+    const W = this.cameras.main.width;
+    const H = this.cameras.main.height;
+
+    this.add.text(W / 2, 52, '🐇 温泉うさぎ 🐇', {
       fontSize: '50px', color: '#ecfdf5',
       fontStyle: 'bold', stroke: '#1a3a2a', strokeThickness: 5,
-    }).setOrigin(0.5).setDepth(10000);
+    }).setOrigin(0.5).setDepth(10000).setScrollFactor(0);
 
-    this.add.text(540, 114, '温泉を上がったうさぎの 💰 をタップして集めよう！', {
+    this.add.text(W / 2, 114, '温泉を上がったうさぎの 💰 をタップして集めよう！', {
       fontSize: '23px', color: '#a7f3d0',
-    }).setOrigin(0.5).setDepth(10000);
+    }).setOrigin(0.5).setDepth(10000).setScrollFactor(0);
 
-    this.add.rectangle(540, 978, 380, 66, 0x071410, 0.88)
-      .setOrigin(0.5).setDepth(10000);
+    this.add.rectangle(W / 2, H - 30, 380, 66, 0x071410, 0.88)
+      .setOrigin(0.5).setDepth(10000).setScrollFactor(0);
 
-    this.scoreText = this.add.text(540, 978, '💰  0', {
+    this.scoreText = this.add.text(W / 2, H - 30, '💰  0', {
       fontSize: '40px', color: '#fbbf24', fontStyle: 'bold',
-    }).setOrigin(0.5).setDepth(10001);
+    }).setOrigin(0.5).setDepth(10001).setScrollFactor(0);
+  }
+
+  /**
+   * Claude Code: ドラッグでカメラをパン、タップ（移動量が閾値未満）でコイン回収を行う
+   */
+  private setupDragCamera(): void {
+    this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
+      this.isPointerDown = true;
+      this.hasDragged = false;
+      this.dragStartX = ptr.x;
+      this.dragStartY = ptr.y;
+      this.cameraStartScrollX = this.cameras.main.scrollX;
+      this.cameraStartScrollY = this.cameras.main.scrollY;
+    });
+
+    this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
+      if (!this.isPointerDown) return;
+      const dx = ptr.x - this.dragStartX;
+      const dy = ptr.y - this.dragStartY;
+      // 8px 以上動いたらドラッグと判定
+      if (!this.hasDragged && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+        this.hasDragged = true;
+      }
+      if (this.hasDragged) {
+        this.cameras.main.scrollX = this.cameraStartScrollX - dx;
+        this.cameras.main.scrollY = this.cameraStartScrollY - dy;
+      }
+    });
+
+    this.input.on('pointerup', (ptr: Phaser.Input.Pointer) => {
+      if (!this.isPointerDown) return;
+      this.isPointerDown = false;
+      if (!this.hasDragged) this.onTap(ptr);
+    });
+
+    // タッチキャンセル時にドラッグ状態をリセット
+    this.input.on('pointercancel', () => {
+      this.isPointerDown = false;
+      this.hasDragged = false;
+    });
   }
 
   /**
@@ -439,13 +494,15 @@ class HotSpringScene extends Phaser.Scene {
   }
 
   /**
-   * Claude Code: タップ座標に近いコインを見つけて回収する
+   * Claude Code: タップ座標（ワールド座標変換済み）に近いコインを見つけて回収する
    */
-  private onPointerDown(ptr: Phaser.Input.Pointer): void {
+  private onTap(ptr: Phaser.Input.Pointer): void {
+    // Claude Code: カメラスクロール分を加算してワールド座標に変換する
+    const wp = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
     for (let i = this.coins.length - 1; i >= 0; i--) {
       const c = this.coins[i];
-      const dx = c.spr.x - ptr.x;
-      const dy = c.spr.y - ptr.y;
+      const dx = c.spr.x - wp.x;
+      const dy = c.spr.y - wp.y;
       if (dx * dx + dy * dy < 44 * 44) {
         this.collectCoin(c, i);
         return;
