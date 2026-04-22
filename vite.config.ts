@@ -43,6 +43,8 @@ export default defineConfig({
         page28: resolve(__dirname, 'page28', 'index.html'),
         page29: resolve(__dirname, 'page29', 'index.html'),
         page30: resolve(__dirname, 'page30', 'index.html'),
+        // Claude: page31 (クォータービュー猿ライフ観賞ゲーム) をビルド入力に追加。
+        page31: resolve(__dirname, 'page31', 'index.html'),
       },
     },
   },
